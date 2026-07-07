@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
 from .entity import Entity, TypeEntity
+from .. import constant
 
 if TYPE_CHECKING:
     from ..spells import Spells
@@ -24,7 +25,7 @@ class Player(Entity):
         self.blocks_sight: bool = False
         self.pos_x: int = x
         self.pos_y: int = y
-        self.hp: int = 40
+        self.hp: int = constant.MAX_HP
         self.base_PA: int = 10
         self.pa: int = self.base_PA
         self.spells: list[Spells] = []

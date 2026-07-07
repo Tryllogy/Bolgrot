@@ -7,12 +7,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 make install      # install dependencies via uv sync
 make run          # install + run the game (uv run python -m src)
+make train        # train the NEAT AI (make train GEN=200 to set generations)
+make play         # watch the best saved genome play
 make clean        # remove __pycache__, build artifacts
 
-uv run python -m src   # run directly without make
+uv run python -m src                        # run the game directly
+uv run --extra ai python -m src.ai.train    # train NEAT (see src/ai/)
+uv run --extra ai python -m src.ai.play     # watch the best genome
 ```
 
-Dependencies are managed with `uv` and locked in `uv.lock`. The project uses a `.venv` local virtual environment. There are no tests yet; `pytest` is listed as a dev dependency for future use.
+Dependencies are managed with `uv` and locked in `uv.lock`. The project uses a `.venv` local virtual environment. The NEAT trainer lives behind the optional `ai` dependency group (`neat-python`), installed with `uv sync --extra ai` (the `make train`/`make play` targets do this for you). There are no tests yet; `pytest` is listed as a dev dependency for future use.
 
 ## Architecture
 
@@ -20,7 +24,7 @@ This is a pygame turn-based isometric grid game. The player tries to survive on 
 
 ### Module responsibilities
 
-- `src/game.py` — `Game` class: owns all game state and exposes the action API (`select_spell`, `play_selected_spell`, `clear_previsu`, `end_turn`, `reset`). Contains stubbed `step()` and `get_observation()` methods (currently commented out) as future entry points for a NEAT/AI runner. **No pygame dependency** — can be imported and run headlessly.
+- `src/game.py` — `Game` class: owns all game state and exposes both the interactive action API (`select_spell`, `play_selected_spell`, `clear_previsu`, `end_turn`, `reset`) and the **AI/NEAT environment API** (`get_observation`, `legal_actions`, `step`, plus the `ACTIONS` table and the `observation_size()`/`num_actions()` static helpers). **No pygame dependency in its own logic** — it can be imported and driven headlessly (set `SDL_VIDEODRIVER=dummy` since it transitively imports pygame via `case`/`spells`).
 - `src/renderer.py` — `Renderer` class: holds rendering state (screen offset, end-turn button, spell render list). All drawing methods receive game state as arguments and never mutate it. `_compute_map_offset()` (static method) calculates the isometric origin that centers the map on screen.
 - `src/__main__.py` — pygame event loop only. Translates user input into `Game` method calls; passes game state to `Renderer` methods. Keyboard: `SPACE` ends the turn; `1`/`2`/`3` select the player's spell at index 0/1/2 (via `game.select_spell(event.key - pygame.K_1)`); `ESC` quits.
 - `src/constant.py` — all magic numbers including layout constants (`RIGHT_PANEL_W`, `BUTTON_W`, `BUTTON_H`, `SPELL_GAP`) and map config path (`MAP_CONF`).
@@ -84,3 +88,19 @@ Spells also carry `cost` (AP cost), `max_use`, `time_used` (base-class attr, def
 ### Sprite assets
 
 Sprites are stored as both `.xcf` (GIMP source) and `.png` in `src/sprites_png/`. Spell classes reference `.png` filenames in their `sprite` field. Images are lazy-loaded on first access via the `image` property.
+
+### NEAT / AI runner
+
+`src/ai/` (optional `ai` dependency group, `neat-python`) evolves a network to play the game headlessly. It drives `Game` purely through the environment API — no game logic lives in `src/ai/`.
+
+**Environment API on `Game`** (all in `src/game.py`):
+- `get_observation() -> list[float]` — fixed-length egocentric vector. Layout: 11 scalars `[px, py, hp, pa, waves, flame_count, boss_dx, boss_dy, castable_0..2]`, then the `K_NEAREST_FLAMES` nearest flames and `K_NEAREST_SPAWN` nearest next-spawn tiles, each `(present, dx, dy)`, all normalised to ~`[-1, 1]`. Length is `observation_size()` (currently **53**). `K_NEAREST_FLAMES`/`K_NEAREST_SPAWN` live in `constant.py`.
+- `ACTIONS` (module-level `_ACTIONS`, aliased as `Game.ACTIONS`) — the fixed discrete action space, **17** entries. Each is `(spell_index | None, (dx, dy))`; the target tile is the player's position plus the offset. Because every spell targets one of 4 orthogonal / 4 diagonal directions at range 1–2, the space collapses to ShortJump×4 + LongJump×8 (range 1 and 2) + MoveFlames×4 + one end-turn (`(None, (0, 0))`, the last index). This makes the target position-independent so the network never has to output an arbitrary tile.
+- `legal_actions() -> list[bool]` — mask over `ACTIONS`. End-turn is always legal while live; a spell action is legal only when the spell `is_castable` **and** its target tile is in the spell's `previsu()`. All-illegal once `done`.
+- `step(action_index) -> (reward, done)` — applies one action. The reward is shaped so **active play beats sitting still** (all weights are `REWARD_*` constants in `constant.py`): clearing a flame is the dominant term (`REWARD_CLEAR_FLAME`, default `2.0`); surviving a turn pays only a token `REWARD_SURVIVE_TURN` (`0.1`) so "always end turn" is *not* optimal; `REWARD_HP_DELTA` (`0.02 × ΔHP`) mildly discourages waste; terminal `REWARD_WIN` (`+100`) / `REWARD_DEATH` (`-10`); illegal actions are no-ops (`REWARD_ILLEGAL`, masked out in practice). **Only flame *reductions* are rewarded** — the wave spawned on an end-turn adds flames the agent cannot prevent, so `flames_before - flames_after` is clamped to positive (`if cleared > 0`). Episodes always terminate because HP/PA are finite (every spell consumes both). Note: every non-winning game ends in death (HP drains 1/turn after all waves spawn), so the passive "end turn forever" strategy scores ~`-6.3`, below any policy that safely clears flames.
+
+**`src/ai/` modules:**
+- `policy.py` — `choose_action(net, game)` (argmax over network outputs masked by `legal_actions()`), `run_episode(net, seed)` and `evaluate(net, seeds)` (mean total reward). `MAX_STEPS` is a safety cap.
+- `train.py` — `python -m src.ai.train [--generations N] [--out winner.pkl]`. `_load_config()` asserts the config's `num_inputs`/`num_outputs` match `observation_size()`/`num_actions()`. `eval_genomes` scores each genome on the fixed `EVAL_SEEDS` set (comparable fitness across the population and generations). Pickles the best genome to `src/ai/winner.pkl` and writes `neat-checkpoint-*` every 25 generations (both git-ignored).
+- `play.py` — `python -m src.ai.play [--genome winner.pkl] [--seed S] [--delay MS]`. Loads a genome and drives the game through the real `Renderer` (needs a display).
+- `config-neat.txt` — NEAT hyperparameters, shipped as package data (`ai/*.txt`). **If you change the observation layout or `ACTIONS`, update `num_inputs`/`num_outputs` here** or `train.py` refuses to start.
