@@ -7,12 +7,20 @@ one place. Nothing here contains game logic — it only reads the environment AP
 """
 from __future__ import annotations
 
+from typing import Callable
+
 import torch
 
-from ..game import Game
+from ..game import Game, REWARD_PARTS
 from ..entity import Player
 from .. import constant
 from .network import ActorCritic
+
+# An action function maps the current game state to a chosen action index. Both
+# neural policies (:func:`net_action_fn`) and scripted baselines
+# (``src/ai/baselines.py``) expose this shape so the same rollout code scores
+# them all.
+ActionFn = Callable[[Game], int]
 
 # Fixed seeds used to score a policy so results are comparable across training
 # runs while still covering several flame layouts.
@@ -46,31 +54,96 @@ def choose_action(net: ActorCritic, game: Game,
     return int(torch.distributions.Categorical(logits=logits).sample().item())
 
 
+def net_action_fn(net: ActorCritic, deterministic: bool = True) -> ActionFn:
+    """Wrap a network as an :data:`ActionFn` for the rollout helpers."""
+    return lambda game: choose_action(net, game, deterministic)
+
+
+def run_episode_decomposed(
+    act_fn: ActionFn,
+    seed: int,
+    max_steps: int = MAX_STEPS,
+    num_waves: int | None = None,
+    flames_per_wave: int | None = None,
+    spawn_radius: int | None = None,
+) -> tuple[float, bool, int, dict[str, float]]:
+    """Play one game with ``act_fn`` and report the reward broken down by term.
+
+    Returns ``(total_reward, won, steps, parts)`` where ``parts`` sums each of
+    :data:`REWARD_PARTS` over the episode — so you can see *which* term a
+    policy is accumulating, not just the scalar return. ``num_waves`` /
+    ``flames_per_wave`` / ``spawn_radius`` set the curriculum difficulty
+    (``None`` each = full game).
+    """
+    game = Game(Player(*constant.BASE_PLAYER_POS), seed=seed,
+                num_waves=num_waves, flames_per_wave=flames_per_wave,
+                spawn_radius=spawn_radius)
+    total = 0.0
+    steps = 0
+    parts = {part: 0.0 for part in REWARD_PARTS}
+    for _ in range(max_steps):
+        if game.done:
+            break
+        reward, done = game.step(act_fn(game))
+        total += reward
+        steps += 1
+        for part, value in game.last_reward.items():
+            parts[part] += value
+        if done:
+            break
+    return total, game.won, steps, parts
+
+
 def run_episode(net: ActorCritic, seed: int,
                 deterministic: bool = True,
                 max_steps: int = MAX_STEPS) -> tuple[float, bool]:
     """Play one full game and return ``(total_reward, won)``."""
-    game = Game(Player(*constant.BASE_PLAYER_POS), seed=seed)
-    total = 0.0
-    for _ in range(max_steps):
-        if game.done:
-            break
-        reward, done = game.step(choose_action(net, game, deterministic))
-        total += reward
-        if done:
-            break
-    return total, game.won
+    total, won, _, _ = run_episode_decomposed(
+        net_action_fn(net, deterministic), seed, max_steps)
+    return total, won
+
+
+def evaluate_decomposed(
+    net: ActorCritic,
+    seeds: list[int] = EVAL_SEEDS,
+    deterministic: bool = True,
+    num_waves: int | None = None,
+    flames_per_wave: int | None = None,
+    spawn_radius: int | None = None,
+) -> tuple[float, float, dict[str, float]]:
+    """Mean reward, win rate, and per-term reward breakdown over ``seeds``.
+
+    The ``parts`` dict sums each of :data:`REWARD_PARTS`, averaged over seeds —
+    the same decomposition ``src/ai/baselines.py`` prints, so training logs and
+    the offline benchmark speak the same language. ``num_waves`` /
+    ``flames_per_wave`` / ``spawn_radius`` evaluate at a given curriculum
+    difficulty so the win rate reflects the stage being trained on.
+    """
+    net.eval()
+    act_fn = net_action_fn(net, deterministic)
+    results = [run_episode_decomposed(act_fn, s, num_waves=num_waves,
+                                      flames_per_wave=flames_per_wave,
+                                      spawn_radius=spawn_radius)
+               for s in seeds]
+    net.train()
+    n = len(seeds)
+    mean_reward = sum(total for total, _, _, _ in results) / n
+    win_rate = sum(1 for _, won, _, _ in results if won) / n
+    parts = {p: sum(r[3][p] for r in results) / n for p in REWARD_PARTS}
+    return mean_reward, win_rate, parts
 
 
 def evaluate(net: ActorCritic, seeds: list[int] = EVAL_SEEDS,
              deterministic: bool = True) -> tuple[float, float]:
     """Mean total reward and win rate of ``net`` over ``seeds``."""
-    net.eval()
-    results = [run_episode(net, s, deterministic) for s in seeds]
-    net.train()
-    mean_reward = sum(r for r, _ in results) / len(results)
-    win_rate = sum(1 for _, won in results if won) / len(results)
+    mean_reward, win_rate, _ = evaluate_decomposed(net, seeds, deterministic)
     return mean_reward, win_rate
+
+
+def format_reward_parts(parts: dict[str, float]) -> str:
+    """Compact ``name +value`` view of a reward breakdown (nonzero terms)."""
+    return "  ".join(f"{name} {parts[name]:+.2f}"
+                     for name in REWARD_PARTS if abs(parts[name]) > 1e-9)
 
 
 def save_policy(net: ActorCritic, path: str) -> None:

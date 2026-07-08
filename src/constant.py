@@ -45,12 +45,34 @@ K_NEAREST_SPAWN = 6
 # must out-earn passively ending turns. Survival is kept deliberately tiny so
 # "sit still and end turns" is not a winning strategy. Flame *spawns* are never
 # penalised (the agent cannot prevent them) — only flame *reductions* pay out.
-REWARD_CLEAR_FLAME = 2.0    # per flame removed from the board
+REWARD_CLEAR_FLAME = 10.0    # per flame removed from the board
 REWARD_SURVIVE_TURN = 0.1   # per turn survived (small; anti-suicide only)
 REWARD_HP_DELTA = 0.02      # per HP gained/lost (tiny nudge against waste)
 REWARD_WIN = 100.0          # terminal: board cleared after all waves
-REWARD_DEATH = -10.0        # terminal: player died
+REWARD_DEATH = -10.0        # terminal: player died (base cost)
+# Extra death cost per wave still unspawned when the player dies. Dying early
+# (many waves left) must hurt more than the handful of flames clearable before
+# then, so "clear a few then die" can never beat surviving. See `Game.step`.
+REWARD_DEATH_PER_WAVE_LEFT = -5.0
 REWARD_ILLEGAL = -0.1       # picked an illegal action (guard; masked in play)
+
+# Shaping on top of the outcome rewards above, to guide *how* the agent plays.
+# Approach: reward the player for physically moving toward the nearest flame or
+# next-spawn tile (only the two jump spells move the player).
+REWARD_APPROACH = 1.0      # per tile closer to the nearest flame / spawn tile
+# Per-spell cast bias: kept near zero on purpose. An *unconditional* per-cast
+# reward is farmable (the agent banks it by casting uselessly until PA drains),
+# so progress is paid through REWARD_CLEAR/REWARD_APPROACH instead. Only the
+# costly no-progress "Inaction" flame-drag keeps a small negative nudge.
+# Indexed by spell_index (0=ShortJump, 1=LongJump, 2=MoveFlames) in `step`.
+REWARD_CAST_SHORTJUMP = 0.0     # "Astral leap"  — neutral (reward the outcome)
+REWARD_CAST_LONGJUMP = 0.0      # "Double leap"  — neutral (reward the outcome)
+REWARD_CAST_MOVEFLAMES = -0.2   # "Inaction"     — discouraged
+REWARD_CAST = (
+    REWARD_CAST_SHORTJUMP,
+    REWARD_CAST_LONGJUMP,
+    REWARD_CAST_MOVEFLAMES,
+)
 
 # Package-data paths resolved relative to the installed `src` package so they
 # work regardless of the current working directory.

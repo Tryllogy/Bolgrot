@@ -25,7 +25,7 @@ from ..game import Game
 from ..entity import Player
 from .. import constant
 from .network import ActorCritic
-from .policy import evaluate, save_policy
+from .policy import evaluate_decomposed, format_reward_parts, save_policy
 
 
 @dataclass
@@ -54,6 +54,15 @@ class PPOConfig:
     out_path: str = ""             # where the best-by-eval policy is saved
     checkpoint_path: str = ""      # where the resumable training state is saved
     resume_from: str = ""          # training checkpoint to continue from
+    # Curriculum: ordered (num_waves, flames_per_wave, spawn_radius) stages,
+    # easy -> hard. The agent starts on stage 0 and is promoted to the next
+    # once its eval win rate reaches `promote_win_rate`. Empty = fixed full
+    # difficulty (no curriculum). A tiny first stage (a flame spawned next
+    # to the player) is trivially winnable, giving PPO the reward gradient it
+    # needs before the full game. Use `None` in the last stage's fields for the
+    # true patterns / full wave count.
+    curriculum: tuple[tuple[int | None, int | None, int | None], ...] = ()
+    promote_win_rate: float = 0.7  # advance a stage when eval win rate >= this
 
     @property
     def batch_size(self) -> int:
@@ -72,16 +81,36 @@ class _VecGames:
     stacked tensors ready for the network.
     """
 
-    def __init__(self, num_envs: int, rng: random.Random, device: str) -> None:
+    def __init__(self, num_envs: int, rng: random.Random, device: str,
+                 num_waves: int | None = None,
+                 flames_per_wave: int | None = None,
+                 spawn_radius: int | None = None) -> None:
         self._rng = rng
         self._device = device
-        self.games = [
-            Game(Player(*constant.BASE_PLAYER_POS), seed=self._seed())
-            for _ in range(num_envs)
-        ]
+        self._num_envs = num_envs
+        self.num_waves = num_waves
+        self.flames_per_wave = flames_per_wave
+        self.spawn_radius = spawn_radius
+        self.games = [self._new_game() for _ in range(num_envs)]
 
     def _seed(self) -> int:
         return self._rng.randrange(1 << 30)
+
+    def _new_game(self) -> Game:
+        """A fresh game at the current curriculum difficulty."""
+        return Game(Player(*constant.BASE_PLAYER_POS), seed=self._seed(),
+                    num_waves=self.num_waves,
+                    flames_per_wave=self.flames_per_wave,
+                    spawn_radius=self.spawn_radius)
+
+    def set_difficulty(self, num_waves: int | None,
+                       flames_per_wave: int | None,
+                       spawn_radius: int | None) -> None:
+        """Switch to a new curriculum stage; rebuild all envs immediately."""
+        self.num_waves = num_waves
+        self.flames_per_wave = flames_per_wave
+        self.spawn_radius = spawn_radius
+        self.games = [self._new_game() for _ in range(self._num_envs)]
 
     def observe(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Stacked ``(obs, mask)`` for every game in the batch."""
@@ -104,7 +133,7 @@ class _VecGames:
             rewards.append(reward)
             dones.append(done)
             if done:
-                game.reset(seed=self._seed())
+                self.games[i] = self._new_game()
         return (
             torch.tensor(rewards, dtype=torch.float32, device=self._device),
             torch.tensor(dones, dtype=torch.float32, device=self._device),
@@ -163,12 +192,14 @@ class _EpisodeStats:
 def _save_train_checkpoint(
     path: str, net: ActorCritic, optimizer: optim.Optimizer,
     iteration: int, global_step: int, best_score: float,
+    stage_idx: int = 0,
 ) -> None:
     """Save full training state so a run can be resumed.
 
     A superset of the policy checkpoint (:func:`policy.save_policy`) — it adds
     the optimizer state and progress counters, so ``load_policy`` still reads it
-    for playing while ``--resume`` can restore the exact training position.
+    for playing while ``--resume`` can restore the exact training position
+    (including the curriculum ``stage_idx`` reached).
     """
     torch.save(
         {
@@ -180,6 +211,7 @@ def _save_train_checkpoint(
             "iteration": iteration,
             "global_step": global_step,
             "best_score": best_score,
+            "stage_idx": stage_idx,
         },
         path,
     )
@@ -209,6 +241,7 @@ def train(cfg: PPOConfig) -> ActorCritic:
     iter_offset = 0
     global_step = 0
     best_score = float("-inf")
+    stage_idx = 0
     if cfg.resume_from:
         if not os.path.exists(cfg.resume_from):
             raise SystemExit(f"No checkpoint to resume at {cfg.resume_from}.")
@@ -226,11 +259,22 @@ def train(cfg: PPOConfig) -> ActorCritic:
         iter_offset = ckpt.get("iteration", 0)
         global_step = ckpt.get("global_step", 0)
         best_score = ckpt.get("best_score", float("-inf"))
+        stage_idx = ckpt.get("stage_idx", 0)
         print(f"Resumed from {cfg.resume_from}: iteration {iter_offset}, "
-              f"global_step {global_step}, best_score {best_score:.2f}",
+              f"global_step {global_step}, best_score {best_score:.2f}, "
+              f"stage {stage_idx}",
               flush=True)
 
-    envs = _VecGames(cfg.num_envs, rng, device)
+    # Curriculum stages (easy -> hard). No curriculum => one full-difficulty
+    # stage. `stage_idx` (possibly restored above) picks the starting stage.
+    stages: list[tuple[int | None, int | None, int | None]] = (
+        list(cfg.curriculum) if cfg.curriculum else [(None, None, None)])
+    stage_idx = min(stage_idx, len(stages) - 1)
+
+    envs = _VecGames(cfg.num_envs, rng, device,
+                     num_waves=stages[stage_idx][0],
+                     flames_per_wave=stages[stage_idx][1],
+                     spawn_radius=stages[stage_idx][2])
     T, N = cfg.num_steps, cfg.num_envs
 
     # Rollout storage.
@@ -334,22 +378,43 @@ def train(cfg: PPOConfig) -> ActorCritic:
 
         # --- Logging / checkpointing -----------------------------------
         if iteration % cfg.eval_every == 0 or iteration == cfg.iterations:
-            mean_reward, win_rate = evaluate(net)
+            nw, fpw, sr = stages[stage_idx]
+            mean_reward, win_rate, parts = evaluate_decomposed(
+                net, num_waves=nw, flames_per_wave=fpw, spawn_radius=sr)
+            stage_tag = (f" | stage {stage_idx}/{len(stages) - 1} "
+                         f"(waves={nw}, flames={fpw}, radius={sr})"
+                         if len(stages) > 1 else "")
             print(
-                f"iter {total_iter:4d} | step {global_step:>8d} | "
+                f"iter {total_iter:4d} | step {global_step:>8d}{stage_tag} | "
                 f"train_return {stats.mean():7.2f} | "
                 f"eval_reward {mean_reward:7.2f} | win {win_rate:5.1%} | "
-                f"kl {approx_kl.item():.4f}",
+                f"kl {approx_kl.item():.4f}\n"
+                f"           reward parts: {format_reward_parts(parts)}",
                 flush=True,
             )
-            score = win_rate * 1000 + mean_reward  # wins dominate ties
+            # Best-policy score: the curriculum stage dominates, so a policy
+            # that reaches a harder stage always beats an easier-stage one,
+            # then win rate, then mean reward break ties.
+            score = stage_idx * 1_000_000 + win_rate * 1000 + mean_reward
             if cfg.out_path and score > best_score:
                 best_score = score
                 save_policy(net, cfg.out_path)
+            # Promote to the next (harder) stage once the agent reliably wins
+            # the current one. Rebuilds the envs, so refresh the cached rollout
+            # state before the next iteration reads it.
+            if (win_rate >= cfg.promote_win_rate
+                    and stage_idx < len(stages) - 1):
+                stage_idx += 1
+                envs.set_difficulty(*stages[stage_idx])
+                next_obs, next_mask = envs.observe()
+                next_done = torch.zeros(N, device=device)
+                print(f"           >> promoted to stage {stage_idx} "
+                      f"{stages[stage_idx]}", flush=True)
             # Resumable training state: latest weights + optimizer + progress.
             if cfg.checkpoint_path:
                 _save_train_checkpoint(cfg.checkpoint_path, net, optimizer,
-                                       total_iter, global_step, best_score)
+                                       total_iter, global_step, best_score,
+                                       stage_idx)
         else:
             print(
                 f"iter {total_iter:4d} | step {global_step:>8d} | "
@@ -364,5 +429,5 @@ def train(cfg: PPOConfig) -> ActorCritic:
         # Always leave the latest resumable state at the end of the run.
         _save_train_checkpoint(cfg.checkpoint_path, net, optimizer,
                                iter_offset + cfg.iterations, global_step,
-                               best_score)
+                               best_score, stage_idx)
     return net
