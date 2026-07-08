@@ -2,6 +2,5 @@ __pycache__
 .venv
 *.egg-info
 .mypy_cache
-src/ai/winner.pkl
-neat-checkpoint-*
-**/neat-checkpoint-*
+src/ai/ppo.pt
+src/ai/ppo_ckpt.pt

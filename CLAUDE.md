@@ -7,16 +7,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 make install      # install dependencies via uv sync
 make run          # install + run the game (uv run python -m src)
-make train        # train the NEAT AI (make train GEN=200 to set generations)
-make play         # watch the best saved genome play
+make train        # train the PPO agent (make train ITERS=500 to set iterations)
+make resume       # continue training the last checkpoint (make resume ITERS=300)
+make play         # watch the trained policy play
 make clean        # remove __pycache__, build artifacts
 
-uv run python -m src                        # run the game directly
-uv run --extra ai python -m src.ai.train    # train NEAT (see src/ai/)
-uv run --extra ai python -m src.ai.play     # watch the best genome
+uv run python -m src                                    # run the game directly
+uv run --extra ai python -m src.ai.train               # train PPO (see src/ai/)
+uv run --extra ai python -m src.ai.train --resume      # continue from checkpoint
+uv run --extra ai python -m src.ai.play                # watch the trained policy
 ```
 
-Dependencies are managed with `uv` and locked in `uv.lock`. The project uses a `.venv` local virtual environment. The NEAT trainer lives behind the optional `ai` dependency group (`neat-python`), installed with `uv sync --extra ai` (the `make train`/`make play` targets do this for you). There are no tests yet; `pytest` is listed as a dev dependency for future use.
+Dependencies are managed with `uv` and locked in `uv.lock`. The project uses a `.venv` local virtual environment. The PPO agent lives behind the optional `ai` dependency group (`torch`), installed with `uv sync --extra ai` (the `make train`/`make play` targets do this for you). There are no tests yet; `pytest` is listed as a dev dependency for future use.
 
 ## Architecture
 
@@ -24,7 +26,7 @@ This is a pygame turn-based isometric grid game. The player tries to survive on 
 
 ### Module responsibilities
 
-- `src/game.py` — `Game` class: owns all game state and exposes both the interactive action API (`select_spell`, `play_selected_spell`, `clear_previsu`, `end_turn`, `reset`) and the **AI/NEAT environment API** (`get_observation`, `legal_actions`, `step`, plus the `ACTIONS` table and the `observation_size()`/`num_actions()` static helpers). **No pygame dependency in its own logic** — it can be imported and driven headlessly (set `SDL_VIDEODRIVER=dummy` since it transitively imports pygame via `case`/`spells`).
+- `src/game.py` — `Game` class: owns all game state and exposes both the interactive action API (`select_spell`, `play_selected_spell`, `clear_previsu`, `end_turn`, `reset`) and the **RL environment API** (`get_observation`, `legal_actions`, `step`, plus the `ACTIONS` table and the `observation_size()`/`num_actions()` static helpers). **No pygame dependency in its own logic** — it can be imported and driven headlessly (set `SDL_VIDEODRIVER=dummy` since it transitively imports pygame via `case`/`spells`).
 - `src/renderer.py` — `Renderer` class: holds rendering state (screen offset, end-turn button, spell render list). All drawing methods receive game state as arguments and never mutate it. `_compute_map_offset()` (static method) calculates the isometric origin that centers the map on screen.
 - `src/__main__.py` — pygame event loop only. Translates user input into `Game` method calls; passes game state to `Renderer` methods. Keyboard: `SPACE` ends the turn; `1`/`2`/`3` select the player's spell at index 0/1/2 (via `game.select_spell(event.key - pygame.K_1)`); `ESC` quits.
 - `src/constant.py` — all magic numbers including layout constants (`RIGHT_PANEL_W`, `BUTTON_W`, `BUTTON_H`, `SPELL_GAP`) and map config path (`MAP_CONF`).
@@ -89,18 +91,21 @@ Spells also carry `cost` (AP cost), `max_use`, `time_used` (base-class attr, def
 
 Sprites are stored as both `.xcf` (GIMP source) and `.png` in `src/sprites_png/`. Spell classes reference `.png` filenames in their `sprite` field. Images are lazy-loaded on first access via the `image` property.
 
-### NEAT / AI runner
+### RL environment / PPO agent
 
-`src/ai/` (optional `ai` dependency group, `neat-python`) evolves a network to play the game headlessly. It drives `Game` purely through the environment API — no game logic lives in `src/ai/`.
+`src/ai/` (optional `ai` dependency group, `torch`) trains a **PPO** agent to play the game headlessly. It drives `Game` purely through the environment API below — no game logic lives in `src/ai/`.
 
 **Environment API on `Game`** (all in `src/game.py`):
 - `get_observation() -> list[float]` — fixed-length egocentric vector. Layout: 11 scalars `[px, py, hp, pa, waves, flame_count, boss_dx, boss_dy, castable_0..2]`, then the `K_NEAREST_FLAMES` nearest flames and `K_NEAREST_SPAWN` nearest next-spawn tiles, each `(present, dx, dy)`, all normalised to ~`[-1, 1]`. Length is `observation_size()` (currently **53**). `K_NEAREST_FLAMES`/`K_NEAREST_SPAWN` live in `constant.py`.
-- `ACTIONS` (module-level `_ACTIONS`, aliased as `Game.ACTIONS`) — the fixed discrete action space, **17** entries. Each is `(spell_index | None, (dx, dy))`; the target tile is the player's position plus the offset. Because every spell targets one of 4 orthogonal / 4 diagonal directions at range 1–2, the space collapses to ShortJump×4 + LongJump×8 (range 1 and 2) + MoveFlames×4 + one end-turn (`(None, (0, 0))`, the last index). This makes the target position-independent so the network never has to output an arbitrary tile.
+- `ACTIONS` (module-level `_ACTIONS`, aliased as `Game.ACTIONS`) — the fixed discrete action space, **17** entries. Each is `(spell_index | None, (dx, dy))`; the target tile is the player's position plus the offset. Because every spell targets one of 4 orthogonal / 4 diagonal directions at range 1–2, the space collapses to ShortJump×4 + LongJump×8 (range 1 and 2) + MoveFlames×4 + one end-turn (`(None, (0, 0))`, the last index). This makes the target position-independent so the policy never has to output an arbitrary tile.
 - `legal_actions() -> list[bool]` — mask over `ACTIONS`. End-turn is always legal while live; a spell action is legal only when the spell `is_castable` **and** its target tile is in the spell's `previsu()`. All-illegal once `done`.
 - `step(action_index) -> (reward, done)` — applies one action. The reward is shaped so **active play beats sitting still** (all weights are `REWARD_*` constants in `constant.py`): clearing a flame is the dominant term (`REWARD_CLEAR_FLAME`, default `2.0`); surviving a turn pays only a token `REWARD_SURVIVE_TURN` (`0.1`) so "always end turn" is *not* optimal; `REWARD_HP_DELTA` (`0.02 × ΔHP`) mildly discourages waste; terminal `REWARD_WIN` (`+100`) / `REWARD_DEATH` (`-10`); illegal actions are no-ops (`REWARD_ILLEGAL`, masked out in practice). **Only flame *reductions* are rewarded** — the wave spawned on an end-turn adds flames the agent cannot prevent, so `flames_before - flames_after` is clamped to positive (`if cleared > 0`). Episodes always terminate because HP/PA are finite (every spell consumes both). Note: every non-winning game ends in death (HP drains 1/turn after all waves spawn), so the passive "end turn forever" strategy scores ~`-6.3`, below any policy that safely clears flames.
 
-**`src/ai/` modules:**
-- `policy.py` — `choose_action(net, game)` (argmax over network outputs masked by `legal_actions()`), `run_episode(net, seed)` and `evaluate(net, seeds)` (mean total reward). `MAX_STEPS` is a safety cap.
-- `train.py` — `python -m src.ai.train [--generations N] [--out winner.pkl]`. `_load_config()` asserts the config's `num_inputs`/`num_outputs` match `observation_size()`/`num_actions()`. `eval_genomes` scores each genome on the fixed `EVAL_SEEDS` set (comparable fitness across the population and generations). Pickles the best genome to `src/ai/winner.pkl` and writes `neat-checkpoint-*` every 25 generations (both git-ignored).
-- `play.py` — `python -m src.ai.play [--genome winner.pkl] [--seed S] [--delay MS]`. Loads a genome and drives the game through the real `Renderer` (needs a display).
-- `config-neat.txt` — NEAT hyperparameters, shipped as package data (`ai/*.txt`). **If you change the observation layout or `ACTIONS`, update `num_inputs`/`num_outputs` here** or `train.py` refuses to start.
+**`src/ai/` modules** (nothing here contains game logic; keep `__init__.py` import-free so the base game never needs `torch`):
+- `network.py` — `ActorCritic`, a small shared-trunk MLP (`obs_size → 64 → 64 → {policy logits, value}`, orthogonal init). Illegal-action masking is centralised here: `get_action_and_value(obs, mask, action=None)` fills masked logits with `MASK_FILL` (`-1e8`) before the `Categorical`, so the policy can only pick legal moves. Rebuild dims from `Game.observation_size()` / `Game.num_actions()`.
+- `policy.py` — env↔net glue: `choose_action(net, game, deterministic)` (greedy argmax over masked logits, or sampled), `run_episode`/`evaluate` (mean reward + win rate over the fixed `EVAL_SEEDS`), and `save_policy`/`load_policy` (a checkpoint stores the state dict plus `obs_size`/`num_actions`/`hidden` so it rebuilds standalone). `MAX_STEPS` is a safety cap.
+- `ppo.py` — the algorithm. `PPOConfig` holds hyperparameters (CleanRL-style defaults). `_VecGames` steps `num_envs` independent games in lockstep with auto-reset. `_compute_gae` does GAE over the `[num_steps, num_envs]` rollout; `train(cfg)` runs rollout → GAE → clipped-surrogate + value + entropy update, and saves the best-by-eval policy to `cfg.out_path`. **The env is not a `gym` env** — it's driven directly through `get_observation`/`legal_actions`/`step`, and the legal-action mask is stored per step so the PPO update re-masks identically.
+- `train.py` — `python -m src.ai.train [--iterations N] [--num-envs N] [--num-steps N] [--lr] [--seed] [--out ppo.pt] [--checkpoint ppo_ckpt.pt] [--resume [PATH]]`. Saves the best-by-eval **policy** to `src/ai/ppo.pt` and a resumable **training checkpoint** (weights + optimizer + `iteration`/`global_step`/`best_score`) to `src/ai/ppo_ckpt.pt` (both git-ignored). `--iterations` is *per session*; `--resume` restores the checkpoint and runs that many more iterations (each session anneals its own LR — a warm restart), continuing the step/iteration counters and carrying `best_score` so a worse policy never overwrites the saved best. Bare `--resume` uses the `--checkpoint` path.
+- `play.py` — `python -m src.ai.play [--policy ppo.pt] [--seed S] [--delay MS]`. Loads a policy and drives the game through the real `Renderer` (needs a display).
+
+**If you change the observation layout or `ACTIONS`, no config edit is needed** — the network sizes itself from `observation_size()`/`num_actions()` at construction, but existing `ppo.pt` checkpoints become incompatible and must be retrained.

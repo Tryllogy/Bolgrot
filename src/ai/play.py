@@ -1,36 +1,29 @@
-"""Watch a trained NEAT genome play, using the normal game renderer.
+"""Watch a trained PPO policy play, using the normal game renderer.
 
 Run with::
 
-    uv run python -m src.ai.play --delay 400
+    uv run --extra ai python -m src.ai.play --delay 400
 
-Loads ``winner.pkl`` (produced by ``train.py``), rebuilds its network and lets
-it drive the game while rendering each step so you can see the strategy.
+Loads ``ppo.pt`` (produced by ``train.py``) and lets the policy drive the game
+while rendering each step so you can see the strategy.
 """
 from __future__ import annotations
 import argparse
 import os
-import pickle
 
-import neat
 import pygame
 
 from ..entity import Player
 from .. import constant
 from ..game import Game
 from ..renderer import Renderer
-from .policy import choose_action
-from .train import CONFIG_PATH, WINNER_PATH, _load_config
+from .policy import choose_action, load_policy
+from .train import POLICY_PATH
 
 
-def watch(
-    genome_path: str, config_path: str, seed: int, delay_ms: int,
-) -> None:
-    """Render one episode driven by the genome at ``genome_path``."""
-    config = _load_config(config_path)
-    with open(genome_path, "rb") as f:
-        genome = pickle.load(f)
-    net = neat.nn.FeedForwardNetwork.create(genome, config)
+def watch(policy_path: str, seed: int, delay_ms: int) -> None:
+    """Render one episode driven by the policy at ``policy_path``."""
+    net = load_policy(policy_path)
 
     pygame.init()
     screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
@@ -54,7 +47,7 @@ def watch(
 
         now = pygame.time.get_ticks()
         if not game.done and now - last_step >= delay_ms:
-            game.step(choose_action(net, game))
+            game.step(choose_action(net, game, deterministic=True))
             last_step = now
 
         renderer.draw_map(mouse_x, mouse_y, game.map.cases,
@@ -72,17 +65,16 @@ def watch(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Watch a NEAT genome play.")
-    parser.add_argument("--genome", default=WINNER_PATH)
-    parser.add_argument("--config", default=CONFIG_PATH)
+    parser = argparse.ArgumentParser(description="Watch a PPO policy play.")
+    parser.add_argument("--policy", default=POLICY_PATH)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--delay", type=int, default=400,
                         help="milliseconds between AI moves")
     args = parser.parse_args()
-    if not os.path.exists(args.genome):
+    if not os.path.exists(args.policy):
         raise SystemExit(
-            f"No genome at {args.genome}. Run `python -m src.ai.train` first.")
-    watch(args.genome, args.config, args.seed, args.delay)
+            f"No policy at {args.policy}. Run `python -m src.ai.train` first.")
+    watch(args.policy, args.seed, args.delay)
 
 
 if __name__ == "__main__":

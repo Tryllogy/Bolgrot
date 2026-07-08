@@ -20,18 +20,15 @@ Plan:
      (spells, AP, flame spawn patterns, map). Verify against the fight.
   2. Add src/solver/ with an exact search over game states
      (minimax / expectimax / BFS). For a fixed turn-based puzzle boss an
-     exact solver beats NEAT and is PROVABLY optimal.
+     exact solver beats a learned policy and is PROVABLY optimal.
   3. Output as advice, e.g. "jump west, then clear the NE flame".
      NOT automation of the live client.
 
-Related: the NEAT AI already lives in src/ai/ (see CLAUDE.md).
+Related: the RL environment API lives on Game (see CLAUDE.md); a PPO
+agent under src/ai/ is the learned-policy alternative to the solver.
 
 ------------------------------------------------------------------------
  Notes / ideas (optional, lower priority)
 ------------------------------------------------------------------------
-  [ ] Curriculum for NEAT training: start with fewer waves (NB_WAVES) so
+  [ ] Curriculum for PPO training: start with fewer waves (NB_WAVES) so
       wins are actually sampled, raise difficulty as the bot improves.
-  [ ] Level 3 bot export: freeze winner.pkl into a standalone,
-      dependency-free act(obs) Python function (extract weights).
-  [ ] --resume <checkpoint> flag on train.py to continue a run instead
-      of starting a fresh population each time.

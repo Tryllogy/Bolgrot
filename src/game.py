@@ -146,7 +146,7 @@ class Game:
             self.won = True
 
     # ------------------------------------------------------------------
-    # AI / NEAT interface: fixed-size observation, discrete action space.
+    # RL environment interface: fixed-size observation, discrete action space.
     # ------------------------------------------------------------------
 
     def _flame_positions(self) -> list[tuple[int, int]]:

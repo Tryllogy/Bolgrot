@@ -8,7 +8,7 @@ HP and you lose.
 
 The project is also designed to be driven *headlessly* by an AI: all game rules
 live in a pure‑Python `Game` class with **no pygame dependency**, so the logic
-can be stepped programmatically (e.g. by a NEAT/neural‑network runner) as well
+can be stepped programmatically (e.g. by a reinforcement‑learning agent) as well
 as played by a human.
 
 ---
@@ -59,6 +59,9 @@ in `uv.lock`. A local `.venv` is used.
 ```bash
 make install      # uv sync — install dependencies
 make run          # install + launch the game
+make train        # train the PPO agent (make train ITERS=500)
+make resume       # continue training the last checkpoint (make resume ITERS=300)
+make play         # watch the trained policy play
 make clean        # remove __pycache__, build/test caches
 make lint         # flake8 + mypy
 
@@ -67,6 +70,24 @@ uv run python -m src
 ```
 
 Once installed, the packaged console script `bolgrot` is also available.
+
+### Training an AI (PPO)
+
+A [PPO](https://arxiv.org/abs/1707.06347) reinforcement‑learning agent can learn
+to play the game headlessly. It lives in `src/ai/` behind the optional `ai`
+dependency group (`torch`) and drives the pure‑Python `Game` through its
+observation/action/step API — no game logic leaks into the agent.
+
+```bash
+uv run --extra ai python -m src.ai.train --iterations 300            # → src/ai/ppo.pt
+uv run --extra ai python -m src.ai.train --iterations 300 --resume   # continue
+uv run --extra ai python -m src.ai.play                              # watch it play
+```
+
+Training prints the rolling episode return plus a periodic evaluation win rate,
+and saves the best‑scoring policy to `src/ai/ppo.pt`. It also writes a resumable
+training checkpoint (weights + optimizer + progress) to `src/ai/ppo_ckpt.pt`;
+`--resume` picks it up so you can train across several sessions.
 
 ---
 

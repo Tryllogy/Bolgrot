@@ -1,6 +1,6 @@
 SRC := src
 UV := uv
-GEN := 100
+ITERS := 300
 
 all: run
 
@@ -10,9 +10,13 @@ install:
 run: install
 	$(UV) run python -m $(SRC)
 
-# NEAT training / playback (requires the `ai` optional dependency group).
+# PPO training / playback (requires the `ai` optional dependency group).
 train: install
-	$(UV) run --extra ai python -m $(SRC).ai.train --generations $(GEN)
+	$(UV) run --extra ai python -m $(SRC).ai.train --iterations $(ITERS)
+
+# Continue training the last run's checkpoint (src/ai/ppo_ckpt.pt).
+resume: install
+	$(UV) run --extra ai python -m $(SRC).ai.train --iterations $(ITERS) --resume
 
 play: install
 	$(UV) run --extra ai python -m $(SRC).ai.play

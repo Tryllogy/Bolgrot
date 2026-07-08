@@ -17,7 +17,8 @@ dev = [
     "mypy>=1.0",
 ]
 ai = [
-    "neat-python>=2.0.0",
+    "torch>=2.0",
+    "numpy>=1.24",
 ]
 
 [project.scripts]
@@ -28,7 +29,7 @@ where = ["."]
 include = ["src*"]
 
 [tool.setuptools.package-data]
-src = ["config/*.map", "sprites_png/*.png", "patterns/*.json", "ai/*.txt"]
+src = ["config/*.map", "sprites_png/*.png", "patterns/*.json"]
 
 # pygame may be absent from the env mypy runs in (and ships no stubs in some
 # builds); silence missing-import noise rather than failing the type check.

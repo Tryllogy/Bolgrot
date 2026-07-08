@@ -36,7 +36,7 @@ MAX_HP = 40
 
 # Observation encoding: how many nearest flames / next-spawn tiles the AI sees.
 # Each contributes 3 floats (present flag, dx, dy). Changing these changes the
-# observation vector length and therefore `num_inputs` in the NEAT config.
+# observation vector length and therefore the policy network's input size.
 K_NEAREST_FLAMES = 8
 K_NEAREST_SPAWN = 6
 

@@ -1,83 +1,81 @@
-"""Train a NEAT population to play Bolgrot.
+"""Train a PPO agent to play the game headlessly.
 
 Run with::
 
-    uv run python -m src.ai.train --generations 100
+    uv run --extra ai python -m src.ai.train --iterations 300
 
-The best genome is pickled to ``winner.pkl`` (next to this file by default) so
-``python -m src.ai.play`` can load and watch it.
+The best policy (by evaluation win rate, then mean reward) is saved to
+``src/ai/ppo.pt`` as it improves, so an interrupted run still leaves the best
+policy on disk. A resumable training checkpoint (weights + optimizer + progress)
+is saved to ``src/ai/ppo_ckpt.pt``; pass ``--resume`` to continue from it::
+
+    uv run --extra ai python -m src.ai.train --iterations 300 --resume
+
+Watch a trained policy afterwards with ``python -m src.ai.play``.
 """
 from __future__ import annotations
 import argparse
 import os
-import pickle
 
-import neat
+import torch
 
-from ..game import Game
-from .policy import evaluate
+from .ppo import PPOConfig, train
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config-neat.txt")
-WINNER_PATH = os.path.join(os.path.dirname(__file__), "winner.pkl")
-
-# Fixed set of flame layouts every genome is scored against each generation.
-EVAL_SEEDS = [0, 1, 2, 3, 4]
-
-
-def _load_config(path: str) -> neat.Config:
-    """Load the NEAT config and check it matches the game's I/O sizes."""
-    config = neat.Config(
-        neat.DefaultGenome,
-        neat.DefaultReproduction,
-        neat.DefaultSpeciesSet,
-        neat.DefaultStagnation,
-        path,
-    )
-    obs, act = Game.observation_size(), Game.num_actions()
-    if config.genome_config.num_inputs != obs:
-        raise ValueError(
-            f"config num_inputs={config.genome_config.num_inputs} but the "
-            f"game observation is {obs} floats. Fix num_inputs in {path}.")
-    if config.genome_config.num_outputs != act:
-        raise ValueError(
-            f"config num_outputs={config.genome_config.num_outputs} but the "
-            f"game has {act} actions. Fix num_outputs in {path}.")
-    return config
-
-
-def eval_genomes(genomes, config: neat.Config) -> None:
-    """NEAT fitness callback: score every genome on the eval seeds."""
-    for _genome_id, genome in genomes:
-        net = neat.nn.FeedForwardNetwork.create(genome, config)
-        genome.fitness = evaluate(net, EVAL_SEEDS)
-
-
-def train(generations: int, config_path: str, winner_path: str) -> None:
-    """Run NEAT for ``generations`` and pickle the best genome."""
-    config = _load_config(config_path)
-    pop = neat.Population(config)
-    pop.add_reporter(neat.StdOutReporter(True))
-    pop.add_reporter(neat.StatisticsReporter())
-    pop.add_reporter(neat.Checkpointer(
-        generation_interval=25,
-        filename_prefix=os.path.join(
-            os.path.dirname(winner_path), "neat-checkpoint-")))
-
-    winner = pop.run(eval_genomes, generations)
-
-    with open(winner_path, "wb") as f:
-        pickle.dump(winner, f)
-    print(f"\nBest genome saved to {winner_path}")
-    print(f"Fitness: {winner.fitness:.2f}")
+# Defaults next to this file so they are found regardless of CWD.
+POLICY_PATH = os.path.join(os.path.dirname(__file__), "ppo.pt")
+CHECKPOINT_PATH = os.path.join(os.path.dirname(__file__), "ppo_ckpt.pt")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train NEAT on Bolgrot.")
-    parser.add_argument("--generations", type=int, default=100)
-    parser.add_argument("--config", default=CONFIG_PATH)
-    parser.add_argument("--out", default=WINNER_PATH)
+    parser = argparse.ArgumentParser(description="Train a PPO agent.")
+    parser.add_argument("--iterations", type=int, default=300,
+                        help="rollout+update cycles to run this session")
+    parser.add_argument("--num-envs", type=int, default=8)
+    parser.add_argument("--num-steps", type=int, default=128,
+                        help="env steps collected per game per rollout")
+    parser.add_argument("--lr", type=float, default=2.5e-4)
+    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--eval-every", type=int, default=10)
+    parser.add_argument("--out", default=POLICY_PATH,
+                        help="where to save the best-by-eval policy")
+    parser.add_argument("--checkpoint", default=CHECKPOINT_PATH,
+                        help="where to save the resumable training state")
+    parser.add_argument(
+        "--resume", nargs="?", const="", default=None,
+        help="continue training from a checkpoint (defaults to --checkpoint "
+             "when given without a path)")
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available()
+                        else "cpu")
     args = parser.parse_args()
-    train(args.generations, args.config, args.out)
+
+    # Resolve --resume: absent -> no resume; bare flag -> the --checkpoint path;
+    # explicit value -> that path.
+    if args.resume is None:
+        resume_from = ""
+    elif args.resume == "":
+        resume_from = args.checkpoint
+    else:
+        resume_from = args.resume
+
+    cfg = PPOConfig(
+        iterations=args.iterations,
+        num_envs=args.num_envs,
+        num_steps=args.num_steps,
+        learning_rate=args.lr,
+        seed=args.seed,
+        eval_every=args.eval_every,
+        out_path=args.out,
+        checkpoint_path=args.checkpoint,
+        resume_from=resume_from,
+        device=args.device,
+    )
+    mode = f"resuming from {resume_from}" if resume_from else "fresh run"
+    print(f"Training PPO ({mode}): {cfg.iterations} iters, {cfg.num_envs} "
+          f"envs x {cfg.num_steps} steps = {cfg.batch_size} samples/rollout, "
+          f"device={cfg.device}", flush=True)
+    train(cfg)
+    print(f"Done. Best policy: {args.out} | resumable checkpoint: "
+          f"{args.checkpoint}")
 
 
 if __name__ == "__main__":
