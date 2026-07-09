@@ -143,12 +143,15 @@ def _print_table(rows: dict[str, dict[str, float]]) -> None:
 
 def benchmark(policy_path: str | None = None,
               seeds: list[int] = EVAL_SEEDS,
-              mcts_sims: int | None = None) -> dict[str, dict[str, float]]:
+              mcts_sims: int | None = None,
+              az_path: str | None = None,
+              az_sims: int = 120) -> dict[str, dict[str, float]]:
     """Score every baseline (plus a trained policy if given); print a table.
 
     ``mcts_sims`` (opt-in — the MCTS agent is orders of magnitude slower than
     the scripted baselines) adds a lookahead-planning row with that per-move
-    simulation budget; pair it with a small ``seeds`` subset.
+    simulation budget; pair it with a small ``seeds`` subset. ``az_path`` adds
+    an AlphaZero row (net-guided PUCT at ``az_sims`` sims/move) — also slow.
     """
     policies: dict[str, ActionFn] = {
         "end_turn": always_end_turn,
@@ -164,6 +167,13 @@ def benchmark(policy_path: str | None = None,
     if mcts_sims:
         from .mcts import mcts_action_fn
         policies["mcts"] = mcts_action_fn(simulations=mcts_sims)
+    if az_path and os.path.exists(az_path):
+        from .policy import load_policy
+        from .alphazero import az_action_fn
+        policies["alphazero"] = az_action_fn(load_policy(az_path),
+                                             simulations=az_sims)
+    elif az_path:
+        print(f"(no AZ policy at {az_path}; skipping alphazero row)\n")
 
     rows = {name: score_policy(fn, seeds) for name, fn in policies.items()}
     _print_table(rows)
@@ -180,9 +190,15 @@ def main() -> None:
     parser.add_argument("--seeds", type=int, default=None,
                         help="score on the first N EVAL_SEEDS only "
                              "(default: all)")
+    parser.add_argument("--az", default=None,
+                        help="add an AlphaZero row from this policy "
+                             "checkpoint (net-guided PUCT; slow, use --seeds)")
+    parser.add_argument("--az-sims", type=int, default=120,
+                        help="PUCT sims/move for the --az row")
     args = parser.parse_args()
     seeds = EVAL_SEEDS[:args.seeds] if args.seeds else EVAL_SEEDS
-    benchmark(args.policy, seeds=seeds, mcts_sims=args.mcts_sims)
+    benchmark(args.policy, seeds=seeds, mcts_sims=args.mcts_sims,
+              az_path=args.az, az_sims=args.az_sims)
 
 
 if __name__ == "__main__":

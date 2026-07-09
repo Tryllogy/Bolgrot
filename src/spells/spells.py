@@ -1,4 +1,5 @@
 from __future__ import annotations
+import copy
 import os
 import pygame
 from abc import ABC, abstractmethod
@@ -81,6 +82,25 @@ class Spells(ABC):
         self._image: pygame.Surface | None = None
         self.BFS: BFS | None = bfs
         self.time_used: int = 0
+
+    def __deepcopy__(self, memo: dict) -> "Spells":
+        """Deep-copy the spell without its cached sprite surface.
+
+        ``Game.clone()`` deep-copies the whole game for the search agents. The
+        sprite ``_image`` is a lazily-loaded ``pygame.Surface`` (populated only
+        once the game has been *rendered*) and a Surface can't be deep-copied,
+        so we skip it — it reloads on next access. This keeps ``clone()`` safe
+        whether or not the game has been drawn.
+        """
+        cls = self.__class__
+        new = cls.__new__(cls)
+        memo[id(self)] = new
+        for key, value in self.__dict__.items():
+            if key == "_image":
+                new._image = None
+            else:
+                setattr(new, key, copy.deepcopy(value, memo))
+        return new
 
     def is_castable(self, player: Player) -> bool:
         """True if the player has enough PA and uses left to cast."""
@@ -392,6 +412,10 @@ class Spells(ABC):
                 step = (case.x, case.y + sy)
             else:
                 step = (case.x + sx, case.y + sy)
+                for fx, fy in ((case.x + sx, case.y), (case.x, case.y + sy)):
+                    flank = cases.get((fx, fy))
+                    if flank is not None and isinstance(flank.entity, Flame):
+                        player.hp = 0
             new_case = self._find_case(step, cases)
             if new_case is None or new_case.case_type == CaseType.WALL:
                 path = self.BFS.find_path(

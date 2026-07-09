@@ -34,6 +34,17 @@ curriculum-resume: install
 		--curriculum --promote-win $(PROMOTE) --ent-coef $(ENT) \
 		--lr-floor $(LRFLOOR) --resume
 
+# AlphaZero self-play (PUCT + learned policy/value): a fast net that learns to
+# win from the MCTS-strength search. Ramps difficulty like the PPO curriculum.
+alphazero: install
+	$(UV) run --extra ai python -m $(SRC).ai.az_train --iterations $(ITERS) \
+		--curriculum --promote-win $(PROMOTE)
+
+# Resume an AlphaZero run (restores the stage reached from the checkpoint).
+alphazero-resume: install
+	$(UV) run --extra ai python -m $(SRC).ai.az_train --iterations $(ITERS) \
+		--curriculum --promote-win $(PROMOTE) --resume
+
 play: install
 	$(UV) run --extra ai python -m $(SRC).ai.play
 

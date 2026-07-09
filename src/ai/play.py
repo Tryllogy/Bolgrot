@@ -1,11 +1,15 @@
-"""Watch a trained PPO policy play, using the normal game renderer.
+"""Watch a trained policy play, using the normal game renderer.
 
 Run with::
 
     uv run --extra ai python -m src.ai.play --delay 400
+    uv run --extra ai python -m src.ai.play --policy src/ai/az.pt --sims 200
 
-Loads ``ppo.pt`` (produced by ``train.py``) and lets the policy drive the game
-while rendering each step so you can see the strategy.
+Loads a policy (``ppo.pt`` by default) and lets it drive the game while
+rendering each step so you can see the strategy. With ``--sims N`` (N > 0) the
+move is chosen by an AlphaZero **PUCT search** at N simulations (the strong
+agent — use this for ``az.pt``); with ``--sims 0`` the raw policy head decides
+(fast/reactive — the right mode for a plain PPO ``ppo.pt``).
 """
 from __future__ import annotations
 import argparse
@@ -21,9 +25,19 @@ from .policy import choose_action, load_policy
 from .train import POLICY_PATH
 
 
-def watch(policy_path: str, seed: int, delay_ms: int) -> None:
-    """Render one episode driven by the policy at ``policy_path``."""
+def watch(policy_path: str, seed: int, delay_ms: int, sims: int = 0) -> None:
+    """Render one episode driven by the policy at ``policy_path``.
+
+    ``sims > 0`` drives the game with an AlphaZero PUCT search at that budget;
+    ``sims == 0`` uses the raw (deterministic) policy head.
+    """
     net = load_policy(policy_path)
+    if sims > 0:
+        from .alphazero import az_action_fn
+        act_fn = az_action_fn(net, simulations=sims)
+    else:
+        def act_fn(g: Game) -> int:
+            return choose_action(net, g, deterministic=True)
 
     pygame.init()
     screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
@@ -47,7 +61,7 @@ def watch(policy_path: str, seed: int, delay_ms: int) -> None:
 
         now = pygame.time.get_ticks()
         if not game.done and now - last_step >= delay_ms:
-            game.step(choose_action(net, game, deterministic=True))
+            game.step(act_fn(game))
             last_step = now
 
         renderer.draw_map(mouse_x, mouse_y, game.map.cases,
@@ -70,11 +84,14 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--delay", type=int, default=400,
                         help="milliseconds between AI moves")
+    parser.add_argument("--sims", type=int, default=0,
+                        help="PUCT search sims per move (0 = raw policy head; "
+                             "use ~200 to watch the AlphaZero az.pt agent)")
     args = parser.parse_args()
     if not os.path.exists(args.policy):
         raise SystemExit(
             f"No policy at {args.policy}. Run `python -m src.ai.train` first.")
-    watch(args.policy, args.seed, args.delay)
+    watch(args.policy, args.seed, args.delay, args.sims)
 
 
 if __name__ == "__main__":

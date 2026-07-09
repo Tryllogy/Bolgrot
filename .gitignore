@@ -4,3 +4,4 @@ __pycache__
 .mypy_cache
 src/ai/ppo.pt
 src/ai/ppo_ckpt.pt
+src/ai/az*.pt
