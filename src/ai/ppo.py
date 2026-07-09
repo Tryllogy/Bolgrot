@@ -44,7 +44,8 @@ class PPOConfig:
     vf_coef: float = 0.5           # value loss weight
     max_grad_norm: float = 0.5     # gradient clipping
     learning_rate: float = 2.5e-4  # Adam step size
-    anneal_lr: bool = True         # linearly decay LR to 0 over training
+    anneal_lr: bool = True         # linearly decay LR toward lr_floor
+    lr_floor: float = 0.0          # min LR as a fraction of learning_rate
     norm_adv: bool = True          # normalise advantages per minibatch
     clip_vloss: bool = True        # clipped value loss
     hidden: int = 64               # network hidden width
@@ -294,7 +295,11 @@ def train(cfg: PPOConfig) -> ActorCritic:
     for iteration in range(1, cfg.iterations + 1):
         total_iter = iter_offset + iteration
         if cfg.anneal_lr:
+            # Anneal linearly toward `lr_floor` (a fraction of the base LR),
+            # not all the way to 0: with a curriculum, each session must keep
+            # learning to its end so the tail isn't wasted freezing the policy.
             frac = 1.0 - (iteration - 1) / cfg.iterations
+            frac = max(frac, cfg.lr_floor)
             optimizer.param_groups[0]["lr"] = frac * cfg.learning_rate
 
         # --- Rollout ---------------------------------------------------

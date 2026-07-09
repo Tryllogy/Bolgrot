@@ -1,4 +1,5 @@
 from __future__ import annotations
+import copy
 import random
 from . import constant
 from .BFS import BFS
@@ -28,7 +29,8 @@ _ACTIONS: list[tuple[int | None, tuple[int, int]]] = [
 # per-term sums (see ``src/ai/baselines.py``) and spot which term a policy is
 # actually farming. Their sum is exactly the scalar reward ``step`` returns.
 REWARD_PARTS: tuple[str, ...] = (
-    "survive", "cast", "approach", "clear", "hp", "terminal", "illegal",
+    "survive", "stall", "cast", "approach", "clear", "hp", "terminal",
+    "illegal",
 )
 
 
@@ -95,6 +97,75 @@ class Game:
         # Per-step reward decomposition, refreshed by every ``step`` call. Sums
         # to the scalar reward returned. Lets tooling see the breakdown.
         self.last_reward: dict[str, float] = self._zero_reward()
+
+    def clone(self) -> "Game":
+        """Deep, independent copy of the full game state.
+
+        Used by search agents (``src/ai/mcts.py``) to branch and roll back:
+        the game is deterministic, so a clone can be stepped freely without
+        touching the original. Headless-safe — spell sprites are lazy-loaded
+        (`Spells._image` is ``None`` until rendered), so no pygame ``Surface``
+        is ever in the object graph to deepcopy.
+        """
+        return copy.deepcopy(self)
+
+    def get_state(self) -> dict:
+        """Fast snapshot of every mutable field (see :meth:`clone`).
+
+        ~80x cheaper than :meth:`clone` — for search agents that save/restore
+        one working game thousands of times per move rather than deep-copying a
+        node each time. Restore with :meth:`set_state`. The immutable map
+        structure, spell configs and Bolgrot (which never moves) are shared, so
+        only occupancy, counters, RNG and per-turn spell use are captured.
+        """
+        p = self.player
+        return {
+            "px": p.pos_x, "py": p.pos_y, "hp": p.hp, "pa": p.pa,
+            "flames": [(c.x, c.y) for c in self.map.cases.values()
+                       if isinstance(c.entity, Flame)],
+            "time_used": [s.time_used for s in p.spells],
+            "waves_spawned": self.waves_spawned,
+            "turn": self.turn,
+            "done": self.done,
+            "won": self.won,
+            "spawn_pattern": list(self.spawn_pattern),
+            "previsu": list(self.previsualiation),
+            "spell_idx": (p.spells.index(self.spell)
+                          if self.spell is not None else None),
+            "last_reward": dict(self.last_reward),
+            "rng": self._rng.getstate(),
+            "prng": self.patterns._rng.getstate(),
+            "spawn_patterns": list(self.patterns.spawn_patterns),
+        }
+
+    def set_state(self, state: dict) -> None:
+        """Restore a snapshot produced by :meth:`get_state` (in place)."""
+        p = self.player
+        p.pos_x, p.pos_y = state["px"], state["py"]
+        p.hp, p.pa = state["hp"], state["pa"]
+        for spell, used in zip(p.spells, state["time_used"]):
+            spell.time_used = used
+        # Rebuild the movable occupants: flames and the player. Bolgrot never
+        # moves, so leave it in place; the player must stay the *same* object
+        # (it is referenced from both self.player and its cell).
+        for case in self.map.cases.values():
+            if isinstance(case.entity, (Flame, Player)):
+                case.entity = None
+        for fx, fy in state["flames"]:
+            self.map.cases[(fx, fy)].entity = Flame(fx, fy)
+        self.map.cases[(p.pos_x, p.pos_y)].entity = p
+        self.waves_spawned = state["waves_spawned"]
+        self.turn = state["turn"]
+        self.done = state["done"]
+        self.won = state["won"]
+        self.spawn_pattern = list(state["spawn_pattern"])
+        self.previsualiation = list(state["previsu"])
+        self.spell = (p.spells[state["spell_idx"]]
+                      if state["spell_idx"] is not None else None)
+        self.last_reward = dict(state["last_reward"])
+        self._rng.setstate(state["rng"])
+        self.patterns._rng.setstate(state["prng"])
+        self.patterns.spawn_patterns = list(state["spawn_patterns"])
 
     def reset(self, seed: int | None = None) -> None:
         """Re-initialise all game state, keeping the current difficulty."""
@@ -366,6 +437,10 @@ class Game:
             approach_targets, (self.player.pos_x, self.player.pos_y))
 
         if spell_index is None:
+            # Anti-stall: penalise ending a turn with flames still alive on
+            # the board (measured *before* end_turn spawns the next wave, so
+            # only flames the agent chose to leave count — spawns aren't hit).
+            parts["stall"] = constant.REWARD_END_TURN_PER_FLAME * flames_before
             self.end_turn()
             parts["survive"] = constant.REWARD_SURVIVE_TURN
         else:
@@ -394,7 +469,12 @@ class Game:
                 # Death: base cost plus a penalty per wave left unspawned, so
                 # dying early (much game left) is far worse than dying on the
                 # brink — clearing a few flames then dying must never pay off.
-                waves_left = constant.NB_WAVES - self.waves_spawned
+                # Scale by THIS game's wave count (``self.num_waves``), not
+                # the full-game ``NB_WAVES``: on a shrunk curriculum stage,
+                # surviving all its waves then dying must read as "on the
+                # brink" (0 left), not as "4 left" of a 6-wave game. At full
+                # difficulty ``num_waves == NB_WAVES`` so nothing changes.
+                waves_left = self.num_waves - self.waves_spawned
                 parts["terminal"] = (
                     constant.REWARD_DEATH
                     + constant.REWARD_DEATH_PER_WAVE_LEFT * waves_left)

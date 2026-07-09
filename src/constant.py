@@ -55,6 +55,16 @@ REWARD_DEATH = -10.0        # terminal: player died (base cost)
 # then, so "clear a few then die" can never beat surviving. See `Game.step`.
 REWARD_DEATH_PER_WAVE_LEFT = -5.0
 REWARD_ILLEGAL = -0.1       # picked an illegal action (guard; masked in play)
+# Anti-stall: penalty applied on end-turn, scaled by the number of flames
+# left ALIVE on the board at that moment (before the new wave spawns — spawns
+# are never penalised). Ending a turn with a clean board still nets
+# +REWARD_SURVIVE_TURN; ending it with N uncleared flames costs
+# REWARD_END_TURN_PER_FLAME * N, so passively ending turns only pays once the
+# board is cleared. This is what the agent *controls* (killing a flame before
+# end-turn removes its penalty), unlike the fixed flames-still-to-spawn
+# schedule. Keep its magnitude well under the death penalty (REWARD_DEATH +
+# REWARD_DEATH_PER_WAVE_LEFT) so it never makes suicide preferable.
+REWARD_END_TURN_PER_FLAME = -0.5
 
 # Shaping on top of the outcome rewards above, to guide *how* the agent plays.
 # Approach: reward the player for physically moving toward the nearest flame or

@@ -23,8 +23,10 @@ from .network import ActorCritic
 ActionFn = Callable[[Game], int]
 
 # Fixed seeds used to score a policy so results are comparable across training
-# runs while still covering several flame layouts.
-EVAL_SEEDS: list[int] = [101, 202, 303, 404, 505, 606, 707, 808]
+# runs while still covering many flame layouts. 32 seeds keep the win-rate
+# quantisation fine (~3% steps) so curriculum promotion isn't decided by a
+# handful of lucky layouts.
+EVAL_SEEDS: list[int] = [101 * i + 7 for i in range(32)]
 
 # Safety cap so a policy that never makes progress can't loop forever. HP/PA
 # are finite so episodes terminate on their own; this only guards regressions.

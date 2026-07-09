@@ -142,8 +142,14 @@ def _print_table(rows: dict[str, dict[str, float]]) -> None:
 
 
 def benchmark(policy_path: str | None = None,
-              seeds: list[int] = EVAL_SEEDS) -> dict[str, dict[str, float]]:
-    """Score every baseline (plus a trained policy if given); print a table."""
+              seeds: list[int] = EVAL_SEEDS,
+              mcts_sims: int | None = None) -> dict[str, dict[str, float]]:
+    """Score every baseline (plus a trained policy if given); print a table.
+
+    ``mcts_sims`` (opt-in — the MCTS agent is orders of magnitude slower than
+    the scripted baselines) adds a lookahead-planning row with that per-move
+    simulation budget; pair it with a small ``seeds`` subset.
+    """
     policies: dict[str, ActionFn] = {
         "end_turn": always_end_turn,
         "random": random_legal(seed=0),
@@ -155,6 +161,9 @@ def benchmark(policy_path: str | None = None,
         policies["trained"] = net_action_fn(net, deterministic=True)
     elif policy_path:
         print(f"(no policy at {policy_path}; skipping trained baseline)\n")
+    if mcts_sims:
+        from .mcts import mcts_action_fn
+        policies["mcts"] = mcts_action_fn(simulations=mcts_sims)
 
     rows = {name: score_policy(fn, seeds) for name, fn in policies.items()}
     _print_table(rows)
@@ -165,8 +174,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--policy", default="src/ai/ppo.pt",
                         help="trained policy checkpoint to include (optional)")
+    parser.add_argument("--mcts-sims", type=int, default=None,
+                        help="add an MCTS row with this per-move sim budget "
+                             "(slow; use --seeds to shrink the seed set)")
+    parser.add_argument("--seeds", type=int, default=None,
+                        help="score on the first N EVAL_SEEDS only "
+                             "(default: all)")
     args = parser.parse_args()
-    benchmark(args.policy)
+    seeds = EVAL_SEEDS[:args.seeds] if args.seeds else EVAL_SEEDS
+    benchmark(args.policy, seeds=seeds, mcts_sims=args.mcts_sims)
 
 
 if __name__ == "__main__":

@@ -26,20 +26,24 @@ POLICY_PATH = os.path.join(os.path.dirname(__file__), "ppo.pt")
 CHECKPOINT_PATH = os.path.join(os.path.dirname(__file__), "ppo_ckpt.pt")
 
 # Default difficulty ramp for --curriculum: (num_waves, flames_per_wave,
-# spawn_radius) stages from a trivially winnable start (1 flame spawned right
-# next to the player) up to the full game (last stage: all None = the true
-# spawn patterns and wave count). Flames spawn within `spawn_radius` of the
-# player early on because the real difficulty is spawn *distance*, not count.
-# The agent is promoted a stage each time it reliably wins the current one, so
-# PPO always has a reachable win to learn from.
+# spawn_radius) stages ordered by DECLINING difficulty, from a trivially
+# winnable start up to the full game. The percentages are the measured ceiling
+# of the scripted `greedy_clear` heuristic (1.5k seeds each) — used ONLY to
+# order the stages. They are NOT PPO's ceiling: with --ent-coef 0.03 and
+# --lr-floor 0.1, a trained PPO policy far exceeds them (it clears the 0.5
+# promote bar on every stage below, including (3,1,1) whose greedy ceiling is
+# ~9%, and climbs the whole ramp to the full game). The real wall is the LAST
+# stage only: the full 6-wave game is ~0% for any policy (attract-on-jump), so
+# the curriculum's job is "reach stage 7", not "win it".
 DEFAULT_CURRICULUM = (
-    (1, 1, 2),          # trivial: one flame at the player's elbow
-    (1, 1, 5),          # one flame, farther (~11% winnable by random)
-    (1, 2, 4),          # two flames in one wave (~2%)
-    (1, 3, 5),          # three flames in one wave (~0.3%)
-    (2, 2, 6),          # a second wave: flames start to accumulate
-    (3, 3, 8),          # more waves + flames
-    (6, None, None),    # the full game: true patterns, all waves
+    (1, 1, 1),          # greedy ~100% — one flame adjacent, one jump wins
+    (1, 1, 2),          # greedy  ~66% — flame 2 away: must approach (attract)
+    (1, 2, 1),          # greedy  ~34% — two flames at the player's elbow
+    (2, 1, 1),          # greedy  ~33% — a second wave starts to accumulate
+    (1, 2, 2),          # greedy  ~27%
+    (2, 1, 2),          # greedy  ~23%
+    (3, 1, 1),          # greedy   ~9% — PPO still clears 0.5 here
+    (6, None, None),    # the full game: true patterns, all waves (~0%)
 )
 
 
@@ -51,6 +55,14 @@ def main() -> None:
     parser.add_argument("--num-steps", type=int, default=128,
                         help="env steps collected per game per rollout")
     parser.add_argument("--lr", type=float, default=2.5e-4)
+    parser.add_argument("--lr-floor", type=float, default=0.0,
+                        help="min LR as a fraction of --lr (e.g. 0.1): anneal "
+                             "toward it instead of 0 so a curriculum session "
+                             "keeps learning to its end")
+    parser.add_argument("--ent-coef", type=float, default=0.01,
+                        help="entropy bonus weight; raise it (e.g. 0.03) if "
+                             "the policy collapses to a position-blind canned "
+                             "action sequence instead of tracking the flame")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--eval-every", type=int, default=10)
     parser.add_argument("--out", default=POLICY_PATH,
@@ -67,13 +79,14 @@ def main() -> None:
         "--curriculum", action="store_true",
         help="ramp difficulty from a tiny winnable game up to the full one, "
              "promoting a stage each time eval win rate hits --promote-win")
-    parser.add_argument("--promote-win", type=float, default=0.7,
+    parser.add_argument("--promote-win", type=float, default=0.5,
                         help="eval win rate needed to advance a curriculum "
-                             "stage")
+                             "stage (default 0.5; PPO clears it on every "
+                             "shrunk stage, see DEFAULT_CURRICULUM)")
     args = parser.parse_args()
 
-    # Resolve --resume: absent -> no resume; bare flag -> the --checkpoint path;
-    # explicit value -> that path.
+    # Resolve --resume: absent -> no resume; bare flag -> the --checkpoint
+    # path; explicit value -> that path.
     if args.resume is None:
         resume_from = ""
     elif args.resume == "":
@@ -86,6 +99,8 @@ def main() -> None:
         num_envs=args.num_envs,
         num_steps=args.num_steps,
         learning_rate=args.lr,
+        lr_floor=args.lr_floor,
+        ent_coef=args.ent_coef,
         seed=args.seed,
         eval_every=args.eval_every,
         out_path=args.out,
