@@ -46,6 +46,24 @@ DEFAULT_CURRICULUM = (
     (6, None, None),    # the full game: true patterns, all waves (~0%)
 )
 
+# AlphaZero's ramp: DEFAULT_CURRICULUM plus one bridge stage before the full
+# game. Stages here are 4-tuples — the extra field is `spawn_formation`.
+#
+# Why the bridge exists: no stage above ever puts more than ~3 flames on the
+# board, and none puts two flames *adjacent to each other*, so the ramp never
+# teaches the push-chain death (jumping onto a flame shoves its neighbour into
+# the next one, which is instantly lethal). The full game then opens with six.
+# The "line" stage is three contiguous flames on the player's row or column,
+# nearest one within LongJump reach: greedy_clear scores 0/6 on it (its first
+# jump kills it) while MCTS at 300 sims scores 6/6 — hard, but winnable, and
+# unwinnable by the greedy reflex the earlier stages reward.
+AZ_CURRICULUM = tuple(
+    stage + (None,) for stage in DEFAULT_CURRICULUM[:-1]
+) + (
+    (1, 3, None, "line"),   # bridge: dense adjacent flames, push-chain death
+    (6, None, None, None),  # the full game
+)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train a PPO agent.")

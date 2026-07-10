@@ -20,7 +20,7 @@ import os
 import torch
 
 from .alphazero import AZConfig, train
-from .train import DEFAULT_CURRICULUM
+from .train import AZ_CURRICULUM
 
 POLICY_PATH = os.path.join(os.path.dirname(__file__), "az.pt")
 CHECKPOINT_PATH = os.path.join(os.path.dirname(__file__), "az_ckpt.pt")
@@ -78,7 +78,7 @@ def main() -> None:
         checkpoint_path=args.checkpoint,
         resume_from=resume_from,
         device=args.device,
-        curriculum=DEFAULT_CURRICULUM if args.curriculum else (),
+        curriculum=AZ_CURRICULUM if args.curriculum else (),
         promote_win_rate=args.promote_win,
     )
     mode = f"resuming from {resume_from}" if resume_from else "fresh run"

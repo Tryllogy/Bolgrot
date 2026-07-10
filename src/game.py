@@ -51,6 +51,7 @@ class Game:
         num_waves: int | None = None,
         flames_per_wave: int | None = None,
         spawn_radius: int | None = None,
+        spawn_formation: str | None = None,
     ) -> None:
         """Set up the map, player spells, boss, spawn pattern and counters.
 
@@ -68,6 +69,13 @@ class Game:
           makes the early stages actually winnable — the real difficulty is
           spawn *distance*, not count. The final stage leaves this ``None`` to
           train on the true game patterns.
+        - ``spawn_formation`` — when set, overrides both of the above and spawns
+          a *fixed shape*. ``"line"`` places ``flames_per_wave`` mutually
+          adjacent flames in a straight line on the player's own row or column,
+          starting ``SPAWN_LINE_OFFSET`` tiles away. This is the one shape the
+          random-radius stages never produce: a dense cluster where clearing the
+          near flame pushes its neighbour into the next one, which is lethal. It
+          exists to teach the push-chain death before the full game.
         """
         self.map: Map = Map()
         self.player: Player = player
@@ -76,6 +84,7 @@ class Game:
                                else constant.NB_WAVES)
         self.flames_per_wave: int | None = flames_per_wave
         self.spawn_radius: int | None = spawn_radius
+        self.spawn_formation: str | None = spawn_formation
         bfs: BFS = BFS(self.map)
         self.player.spells = [
             ShortJump(bfs=bfs),
@@ -172,35 +181,70 @@ class Game:
         self.__init__(  # type: ignore[misc]
             self.player, seed=seed,
             num_waves=self.num_waves, flames_per_wave=self.flames_per_wave,
-            spawn_radius=self.spawn_radius)
+            spawn_radius=self.spawn_radius,
+            spawn_formation=self.spawn_formation)
 
     def _make_wave(
         self, pattern: list[tuple[int, int]]
     ) -> list[tuple[int, int]]:
         """Shape a drawn spawn wave for the current curriculum difficulty.
 
-        With ``spawn_radius`` set, ignore ``pattern`` and place the flames on
-        random free tiles near the player instead (the easy, winnable regime);
-        otherwise just cap the real pattern to ``flames_per_wave``.
+        ``spawn_formation`` wins over ``spawn_radius``, which wins over the
+        drawn ``pattern`` (merely capped to ``flames_per_wave``).
         """
+        if self.spawn_formation == "line":
+            return self._line_spawn(self.flames_per_wave or 3)
         if self.spawn_radius is not None:
             return self._near_spawn(self.flames_per_wave or 1)
         if self.flames_per_wave is None:
             return pattern
         return pattern[:self.flames_per_wave]
 
-    def _near_spawn(self, k: int) -> list[tuple[int, int]]:
-        """``k`` random free tiles within ``spawn_radius`` of the player."""
+    def _near_spawn(self, k: int, radius: int | None = None) -> \
+            list[tuple[int, int]]:
+        """``k`` random free tiles within ``radius`` (default ``spawn_radius``)
+        of the player."""
+        if radius is None:
+            radius = self.spawn_radius
         px, py = self.player.pos_x, self.player.pos_y
         occupied = self._occupied_tiles()
         candidates = [
             pos for pos, case in self.map.cases.items()
             if case.case_type == CaseType.FREE
             and pos not in occupied
-            and 0 < abs(pos[0] - px) + abs(pos[1] - py) <= self.spawn_radius
+            and 0 < abs(pos[0] - px) + abs(pos[1] - py) <= radius
         ]
         self._rng.shuffle(candidates)
         return candidates[:k]
+
+    def _line_spawn(self, k: int) -> list[tuple[int, int]]:
+        """``k`` contiguous flames on the player's row or column.
+
+        The line starts ``SPAWN_LINE_OFFSET`` tiles from the player and runs
+        away from them, so the nearest flame is within LongJump range while the
+        far one is not. Directions are tried in random order; a direction is
+        usable only if all ``k`` tiles are free and unoccupied. Falls back to
+        :meth:`_near_spawn` when the player is too close to an edge for any
+        direction to fit.
+        """
+        px, py = self.player.pos_x, self.player.pos_y
+        occupied = self._occupied_tiles()
+        directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+        self._rng.shuffle(directions)
+        for dx, dy in directions:
+            line = [
+                (px + dx * (constant.SPAWN_LINE_OFFSET + i),
+                 py + dy * (constant.SPAWN_LINE_OFFSET + i))
+                for i in range(k)
+            ]
+            if all(
+                (case := self.map.cases.get(pos)) is not None
+                and case.case_type == CaseType.FREE
+                and pos not in occupied
+                for pos in line
+            ):
+                return line
+        return self._near_spawn(k, radius=constant.SPAWN_LINE_OFFSET + k)
 
     def select_spell(self, spell_index: int) -> None:
         """Select a spell and compute its previsualisation tiles.

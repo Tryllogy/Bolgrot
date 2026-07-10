@@ -255,6 +255,7 @@ def self_play_game(net: ActorCritic, seed: int, simulations: int,
                    num_waves: int | None = None,
                    flames_per_wave: int | None = None,
                    spawn_radius: int | None = None,
+                   spawn_formation: str | None = None,
                    dirichlet_alpha: float = 0.3,
                    temp_moves: int = 12,
                    max_steps: int = 500) -> tuple[list[_Sample], bool]:
@@ -268,7 +269,7 @@ def self_play_game(net: ActorCritic, seed: int, simulations: int,
     """
     game = Game(Player(*constant.BASE_PLAYER_POS), seed=seed,
                 num_waves=num_waves, flames_per_wave=flames_per_wave,
-                spawn_radius=spawn_radius)
+                spawn_radius=spawn_radius, spawn_formation=spawn_formation)
     samples: list[_Sample] = []
     rewards: list[float] = []
 
@@ -445,7 +446,8 @@ def train(cfg: AZConfig) -> ActorCritic:
 
     for iteration in range(1, cfg.iterations + 1):
         total_iter = iter_offset + iteration
-        nw, fpw, sr = stages[stage_idx]
+        # Stages are (waves, flames, radius) or (waves, flames, radius, shape).
+        nw, fpw, sr, fm = (tuple(stages[stage_idx]) + (None,))[:4]
 
         # --- Self-play -------------------------------------------------
         wins = 0
@@ -455,6 +457,7 @@ def train(cfg: AZConfig) -> ActorCritic:
                 simulations=cfg.simulations, c_puct=cfg.c_puct,
                 gamma=cfg.gamma, rng=rng, num_actions=num_actions,
                 num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
+                spawn_formation=fm,
                 dirichlet_alpha=cfg.dirichlet_alpha, temp_moves=cfg.temp_moves)
             buffer.extend(samples)
             wins += int(won)
@@ -469,9 +472,10 @@ def train(cfg: AZConfig) -> ActorCritic:
             act = az_action_fn(net, simulations=cfg.eval_simulations,
                                c_puct=cfg.c_puct, gamma=cfg.gamma)
             mean_reward, win_rate, parts = _eval_action_fn(
-                act, cfg.eval_seeds, nw, fpw, sr)
+                act, cfg.eval_seeds, nw, fpw, sr, fm)
             stage_tag = (f" | stage {stage_idx}/{len(stages) - 1} "
-                         f"(w={nw},f={fpw},r={sr})" if len(stages) > 1 else "")
+                         f"(w={nw},f={fpw},r={sr}"
+                         f"{',' + fm if fm else ''})" if len(stages) > 1 else "")
             print(
                 f"iter {total_iter:4d}{stage_tag} | buffer {len(buffer):6d} | "
                 f"selfplay_win {sp_win:5.1%} | p_loss {p_loss:6.3f} | "
@@ -479,7 +483,14 @@ def train(cfg: AZConfig) -> ActorCritic:
                 f"eval_reward {mean_reward:7.2f}\n"
                 f"           reward parts: {format_reward_parts(parts)}",
                 flush=True)
-            score = stage_idx * 1_000_000 + win_rate * 1000 + mean_reward
+            # Lexicographic: stage, then win rate, then shaped reward. The
+            # win-rate band must exceed the reward's whole range or a policy
+            # that never wins can outscore one that does — with `win_rate*1000`
+            # a single win in 16 (+62.5) lost to an +80 swing in shaped reward,
+            # and a 0%-win policy overwrote the only full-game winner we had.
+            score = (stage_idx * 10_000_000
+                     + win_rate * 100_000
+                     + mean_reward)
             if cfg.out_path and score > best_score:
                 best_score = score
                 save_policy(net, cfg.out_path)
@@ -507,13 +518,15 @@ def train(cfg: AZConfig) -> ActorCritic:
 
 def _eval_action_fn(act: ActionFn, seeds: list[int],
                     num_waves: int | None, flames_per_wave: int | None,
-                    spawn_radius: int | None) -> tuple:
+                    spawn_radius: int | None,
+                    spawn_formation: str | None = None) -> tuple:
     """Mean reward, win rate and parts for an ActionFn over ``seeds``."""
     from .policy import run_episode_decomposed
     from ..game import REWARD_PARTS
     results = [run_episode_decomposed(act, s, num_waves=num_waves,
                                       flames_per_wave=flames_per_wave,
-                                      spawn_radius=spawn_radius)
+                                      spawn_radius=spawn_radius,
+                                      spawn_formation=spawn_formation)
                for s in seeds]
     n = len(seeds)
     mean_reward = sum(r[0] for r in results) / n

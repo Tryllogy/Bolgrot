@@ -68,18 +68,19 @@ def run_episode_decomposed(
     num_waves: int | None = None,
     flames_per_wave: int | None = None,
     spawn_radius: int | None = None,
+    spawn_formation: str | None = None,
 ) -> tuple[float, bool, int, dict[str, float]]:
     """Play one game with ``act_fn`` and report the reward broken down by term.
 
     Returns ``(total_reward, won, steps, parts)`` where ``parts`` sums each of
     :data:`REWARD_PARTS` over the episode — so you can see *which* term a
     policy is accumulating, not just the scalar return. ``num_waves`` /
-    ``flames_per_wave`` / ``spawn_radius`` set the curriculum difficulty
-    (``None`` each = full game).
+    ``flames_per_wave`` / ``spawn_radius`` / ``spawn_formation`` set the
+    curriculum difficulty (``None`` each = full game).
     """
     game = Game(Player(*constant.BASE_PLAYER_POS), seed=seed,
                 num_waves=num_waves, flames_per_wave=flames_per_wave,
-                spawn_radius=spawn_radius)
+                spawn_radius=spawn_radius, spawn_formation=spawn_formation)
     total = 0.0
     steps = 0
     parts = {part: 0.0 for part in REWARD_PARTS}

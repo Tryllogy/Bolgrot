@@ -34,6 +34,10 @@ NB_WAVES = 6
 # Player starting hit points (used for observation normalisation).
 MAX_HP = 40
 
+# Curriculum `spawn_formation="line"`: how far from the player the flame line
+# starts. 2 keeps the nearest flame inside LongJump's range-2 reach.
+SPAWN_LINE_OFFSET = 2
+
 # Observation encoding: how many nearest flames / next-spawn tiles the AI sees.
 # Each contributes 3 floats (present flag, dx, dy). Changing these changes the
 # observation vector length and therefore the policy network's input size.
