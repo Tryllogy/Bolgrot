@@ -176,6 +176,30 @@ def _simulate(root: _Node, work: Game, rollout_policy: ActionFn,
         visited.value += ret
 
 
+def mcts_root_visits(game: Game, simulations: int, rng: random.Random,
+                     rollout_depth: int = 16, c_ucb: float = 1.4,
+                     rollout_policy: ActionFn | None = None,
+                     gamma: float = 1.0) -> dict[int, int]:
+    """Search ``game`` and return the root's ``{action: visit count}``.
+
+    Same search as :func:`mcts_action_fn` (which is just this plus an argmax),
+    exposed so AlphaZero can use MCTS's visit distribution as a policy target —
+    the search is strong enough to win the full game, so its visits are a much
+    better thing to imitate than a self-play run that never wins. Empty when the
+    game is over or has no legal move.
+    """
+    if game.done:
+        return {}
+    work = game.clone()
+    root = _Node(work, reward_in=0.0, rng=rng)
+    if not root.untried:
+        return {}
+    rollout = rollout_policy if rollout_policy is not None else safe_greedy
+    for _ in range(simulations):
+        _simulate(root, work, rollout, rollout_depth, c_ucb, gamma, rng)
+    return {a: child.visits for a, child in root.children.items()}
+
+
 def mcts_action_fn(simulations: int = 200, rollout_depth: int = 16,
                    c_ucb: float = 1.4, rollout_policy: ActionFn | None = None,
                    gamma: float = 1.0, seed: int = 0) -> ActionFn:

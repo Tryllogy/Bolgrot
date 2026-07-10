@@ -312,6 +312,63 @@ def self_play_game(net: ActorCritic, seed: int, simulations: int,
     return samples, game.won
 
 
+def mcts_bootstrap_game(seed: int, simulations: int, gamma: float,
+                        rng: random.Random, num_actions: int,
+                        num_waves: int | None = None,
+                        flames_per_wave: int | None = None,
+                        spawn_radius: int | None = None,
+                        spawn_formation: str | None = None,
+                        rollout_depth: int = 16,
+                        max_steps: int = 500) -> tuple[list[_Sample], bool]:
+    """Play one game with **MCTS** and record it as AlphaZero training samples.
+
+    Self-play bootstraps the net off its own search, which only works while that
+    search sometimes wins: on the full game ``selfplay_win`` sits at 0%, so the
+    policy target is the visit distribution of a player who always dies and the
+    value head only ever fits losing shaped returns. MCTS wins ~50% of full
+    games at 300 sims, so seeding the buffer with *its* trajectories gives the
+    net winning lines to imitate — the missing ingredient, not more iterations.
+
+    Same ``_Sample`` layout as :func:`self_play_game` (visit distribution as the
+    policy target, discounted return-to-go as the value target); no network is
+    involved, and moves are greedy on visits (no Dirichlet noise — these games
+    are meant to be strong, not exploratory).
+    """
+    from .mcts import mcts_root_visits
+
+    game = Game(Player(*constant.BASE_PLAYER_POS), seed=seed,
+                num_waves=num_waves, flames_per_wave=flames_per_wave,
+                spawn_radius=spawn_radius, spawn_formation=spawn_formation)
+    samples: list[_Sample] = []
+    rewards: list[float] = []
+
+    for _ in range(max_steps):
+        if game.done:
+            break
+        counts = mcts_root_visits(game, simulations, rng,
+                                  rollout_depth=rollout_depth, gamma=gamma)
+        if not counts:
+            break
+        pi = [0.0] * num_actions
+        total = sum(counts.values())
+        for a, n in counts.items():
+            pi[a] = n / total
+        samples.append(_Sample(obs=game.get_observation(),
+                               mask=game.legal_actions(), pi=pi))
+        action = max(counts, key=lambda a: counts[a])
+        reward, _ = game.step(action)
+        rewards.append(reward)
+
+    g = 0.0
+    returns: list[float] = [0.0] * len(rewards)
+    for t in reversed(range(len(rewards))):
+        g = rewards[t] + gamma * g
+        returns[t] = g
+    for i, sample in enumerate(samples):
+        sample.value = returns[i] if i < len(returns) else 0.0
+    return samples, game.won
+
+
 # --- Trainer ----------------------------------------------------------------
 
 @dataclass
@@ -321,6 +378,8 @@ class AZConfig:
     iterations: int = 100           # self-play + update cycles this session
     games_per_iter: int = 8         # self-play games collected per iteration
     simulations: int = 80           # PUCT sims per move during self-play
+    bootstrap_games: int = 0        # MCTS games seeded into the buffer, once
+    bootstrap_simulations: int = 300  # MCTS sims/move for those games
     eval_simulations: int = 120     # PUCT sims per move at evaluation
     c_puct: float = 1.5
     gamma: float = 0.99
@@ -444,6 +503,34 @@ def train(cfg: AZConfig) -> ActorCritic:
     stage_idx = min(stage_idx, len(stages) - 1)
     buffer: deque = deque(maxlen=cfg.buffer_size)
 
+    def bootstrap(idx: int) -> None:
+        """Seed the buffer with MCTS games at stage ``idx``.
+
+        Run at start *and on every promotion*: a stage change swaps the game
+        under the net, and the buffer is a rolling window, so the winning lines
+        seeded for one stage are gone (and wrong) by the time the next is
+        reached. The stage that actually needs this is the last one, where
+        self-play never wins on its own.
+        """
+        if not cfg.bootstrap_games:
+            return
+        nw, fpw, sr, fm = (tuple(stages[idx]) + (None,))[:4]
+        wins = 0
+        for _ in range(cfg.bootstrap_games):
+            samples, won = mcts_bootstrap_game(
+                seed=rng.randrange(1 << 30),
+                simulations=cfg.bootstrap_simulations, gamma=cfg.gamma,
+                rng=rng, num_actions=num_actions,
+                num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
+                spawn_formation=fm)
+            buffer.extend(samples)
+            wins += int(won)
+        print(f"Bootstrapped {cfg.bootstrap_games} MCTS games at "
+              f"{cfg.bootstrap_simulations} sims (stage {idx}): "
+              f"{wins} won, buffer now {len(buffer)} samples", flush=True)
+
+    bootstrap(stage_idx)
+
     for iteration in range(1, cfg.iterations + 1):
         total_iter = iter_offset + iteration
         # Stages are (waves, flames, radius) or (waves, flames, radius, shape).
@@ -499,6 +586,7 @@ def train(cfg: AZConfig) -> ActorCritic:
                 stage_idx += 1
                 print(f"           >> promoted to stage {stage_idx} "
                       f"{stages[stage_idx]}", flush=True)
+                bootstrap(stage_idx)
             if cfg.checkpoint_path:
                 _save_az_checkpoint(cfg.checkpoint_path, net, optimizer,
                                     total_iter, best_score, stage_idx)

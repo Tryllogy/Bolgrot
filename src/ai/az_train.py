@@ -34,6 +34,12 @@ def main() -> None:
     parser.add_argument("--simulations", type=int, default=80,
                         help="PUCT sims per move during self-play")
     parser.add_argument("--eval-simulations", type=int, default=120)
+    parser.add_argument("--bootstrap-games", type=int, default=0,
+                        help="seed the replay buffer with this many MCTS games "
+                             "before training (gives the net winning lines to "
+                             "imitate; self-play never wins the full game)")
+    parser.add_argument("--bootstrap-simulations", type=int, default=300,
+                        help="MCTS sims/move for the bootstrap games")
     parser.add_argument("--c-puct", type=float, default=1.5)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--hidden", type=int, default=64,
@@ -69,6 +75,8 @@ def main() -> None:
         games_per_iter=args.games_per_iter,
         simulations=args.simulations,
         eval_simulations=args.eval_simulations,
+        bootstrap_games=args.bootstrap_games,
+        bootstrap_simulations=args.bootstrap_simulations,
         c_puct=args.c_puct,
         learning_rate=args.lr,
         hidden=args.hidden,
