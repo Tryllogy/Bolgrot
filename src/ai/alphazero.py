@@ -58,6 +58,18 @@ from .policy import (
 )
 
 
+# Value-target scale. The value head is trained on shaped returns, which run to
+# O(100) (REWARD_WIN alone is +100); squared, that MSE is O(10^4), whose
+# gradient — after the global grad-norm clip — swamps the O(1) policy
+# cross-entropy and leaves the policy head at its uniform init (measured: prior
+# entropy within 1% of uniform, p_loss flat, so PUCT loses its prior and
+# degenerates to unguided search). We divide the value *target* by VALUE_SCALE
+# so both losses are O(1) and share the trunk's gradient fairly; the head's
+# output is then in units of VALUE_SCALE, so the search multiplies it back up
+# to raw reward units before mixing it with per-edge rewards in the backup.
+VALUE_SCALE = 100.0
+
+
 # --- Q-value normalisation (MuZero-style) -----------------------------------
 
 class _MinMaxStats:
@@ -128,7 +140,9 @@ def _evaluate(node: _Node, work: Game, net: ActorCritic) -> float:
         node.N[a] = 0
         node.W[a] = 0.0
     node.expanded = True
-    return float(value)
+    # Head is trained in VALUE_SCALE units; the backup mixes this leaf value
+    # with per-edge rewards in raw units, so scale it back up here.
+    return float(value) * VALUE_SCALE
 
 
 def _puct_select(node: _Node, c_puct: float, minmax: _MinMaxStats) -> int:
@@ -444,8 +458,8 @@ def _update(net: ActorCritic, optimizer: optim.Optimizer,
                             device=dev)
         pi = torch.tensor([s.pi for s in batch], dtype=torch.float32,
                           device=dev)
-        z = torch.tensor([s.value for s in batch], dtype=torch.float32,
-                         device=dev)
+        z = torch.tensor([s.value / VALUE_SCALE for s in batch],
+                         dtype=torch.float32, device=dev)
         logits, value = net(obs)
         logp = torch.log_softmax(logits.masked_fill(~mask, MASK_FILL), dim=-1)
         policy_loss = -(pi * logp).sum(dim=-1).mean()
