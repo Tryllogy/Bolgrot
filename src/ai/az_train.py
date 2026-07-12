@@ -40,15 +40,18 @@ def main() -> None:
                              "imitate; self-play never wins the full game)")
     parser.add_argument("--bootstrap-simulations", type=int, default=300,
                         help="MCTS sims/move for the bootstrap games")
-    parser.add_argument("--value-target", choices=("shaped", "winloss"),
+    parser.add_argument("--value-target",
+                        choices=("shaped", "winloss", "blend"),
                         default="shaped",
                         help="value-head target: 'shaped' (discounted shaped "
-                             "return, the historical recipe) or 'winloss' "
-                             "(discounted game outcome ±1 — the A/B aimed at the "
-                             "~50%% plateau). Use a distinct --out/--checkpoint "
-                             "for a winloss run so it never clobbers az.pt; a "
-                             "checkpoint stores no mode, so --resume it with the "
-                             "same --value-target.")
+                             "return, the historical recipe), 'winloss' "
+                             "(discounted game outcome ±1 — collapses on the "
+                             "full game, sparse), or 'blend' (dense shaped "
+                             "return + a large terminal ±bonus, the A/B aimed "
+                             "at the ~50%% plateau). Use a distinct "
+                             "--out/--checkpoint so a run never clobbers az.pt; "
+                             "a checkpoint stores no mode, so --resume it with "
+                             "the same --value-target.")
     parser.add_argument("--c-puct", type=float, default=1.5)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--hidden", type=int, default=64,

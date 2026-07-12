@@ -76,20 +76,43 @@ VALUE_SCALE = 100.0
 # it (= MCTS ~50%) because that target is really a *flame-count* predictor —
 # clears (+10 each, up to +360) swamp REWARD_WIN (+100), so a leaf that "clears
 # 30 then dies" scores nearly as high as one that wins, and PUCT can't rank the
-# winning branch above "die late clearing more". "winloss" replaces the target
-# and the search backup with the discounted *game outcome* (+1 win / -1 loss,
-# terminal only), so the value head learns P(win) and PUCT ranks on it — the
-# canonical AlphaZero signal, aimed straight at that ranking failure.
-VALUE_MODES = ("shaped", "winloss")
+# winning branch above "die late clearing more".
+#
+# "winloss" replaced the target and the search backup with the discounted *game
+# outcome* (+1 win / -1 loss, terminal only). Measured (2026-07-13): it climbs
+# the curriculum but *collapses on the full game* — self-play never wins there,
+# so every full-game target is -1, the value head confidently predicts "all
+# lost", and with the dense shaped guidance gone the search has no gradient to
+# find flames and degenerates to passing turns (stall -480, 0% for 26 straight
+# iters). Sparse outcome removes the exploration signal the game needs.
+#
+# "blend" keeps the dense shaped reward (so the search still explores toward
+# flames) and *adds* a large terminal outcome bonus ±BLEND_TERMINAL_BONUS to
+# both the search edges and the value target — enough to lift a win clear of the
+# best near-win, which is the separation shaped alone lacks. Dense guidance of
+# shaped + the win/near-win ranking winloss was after, without winloss's sparsity.
+VALUE_MODES = ("shaped", "winloss", "blend")
+
+# Raw-reward bonus added to the terminal step in "blend" mode (+win / -loss).
+# Sized above the clear-count spread (~±360) so the outcome dominates the value
+# head's clear-count noise — the whole point is that a win outranks "clear 32
+# then die". The value scale is raised in step so the (larger) target stays O(1).
+BLEND_TERMINAL_BONUS = 300.0
+BLEND_VALUE_SCALE = 300.0
 
 
 def _value_scale(value_mode: str) -> float:
     """Target/leaf scale for a value mode.
 
     Shaped returns are O(100) so they are divided by :data:`VALUE_SCALE` to keep
-    the value loss O(1); outcome targets are already O(1), so no scaling.
+    the value loss O(1); outcome targets are already O(1), so no scaling; blend
+    returns reach ~±770 (shaped + the terminal bonus) so they use a larger scale.
     """
-    return 1.0 if value_mode == "winloss" else VALUE_SCALE
+    if value_mode == "winloss":
+        return 1.0
+    if value_mode == "blend":
+        return BLEND_VALUE_SCALE
+    return VALUE_SCALE
 
 
 # --- Q-value normalisation (MuZero-style) -----------------------------------
@@ -203,6 +226,8 @@ def _simulate(root: _Node, work: Game, net: ActorCritic,
     (``+1``/``-1`` on the terminal step, ``0`` otherwise) rather than the shaped
     step reward, and the leaf value is the net's P(win) at unit scale — so the
     whole backup measures "does this line win", matching the value target.
+    In ``"blend"`` mode edges stay shaped (dense guidance) but a terminal step
+    gets an extra ``±BLEND_TERMINAL_BONUS`` so wins outrank near-wins.
     """
     value_scale = _value_scale(value_mode)
     node = root
@@ -221,6 +246,8 @@ def _simulate(root: _Node, work: Game, net: ActorCritic,
         reward, _ = work.step(a)
         if value_mode == "winloss":
             reward = (1.0 if work.won else -1.0) if work.done else 0.0
+        elif value_mode == "blend" and work.done:
+            reward += BLEND_TERMINAL_BONUS if work.won else -BLEND_TERMINAL_BONUS
         node.edge_reward[a] = reward
         child = _Node(work)
         node.children[a] = child
@@ -308,12 +335,18 @@ def _fill_value_targets(samples: list["_Sample"], rewards: list[float],
     ``"shaped"`` discounts the per-step shaped ``rewards``; ``"winloss"``
     discounts a stream that is ``0`` everywhere except the terminal step, which
     carries the game outcome (``+1`` won / ``-1`` otherwise) — so a sample's
-    target is ``±gamma**(plies-to-end)``, a pure P(win) signal.
+    target is ``±gamma**(plies-to-end)``, a pure P(win) signal. ``"blend"``
+    keeps the shaped stream but adds ``±BLEND_TERMINAL_BONUS`` to the terminal
+    step, so the target is the dense shaped return lifted by a strong outcome.
     """
     if value_mode == "winloss":
         stream = [0.0] * len(rewards)
         if stream:
             stream[-1] = 1.0 if won else -1.0
+    elif value_mode == "blend":
+        stream = list(rewards)
+        if stream:
+            stream[-1] += BLEND_TERMINAL_BONUS if won else -BLEND_TERMINAL_BONUS
     else:
         stream = rewards
     g = 0.0

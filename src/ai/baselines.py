@@ -197,7 +197,8 @@ def main() -> None:
                              "checkpoint (net-guided PUCT; slow, use --seeds)")
     parser.add_argument("--az-sims", type=int, default=120,
                         help="PUCT sims/move for the --az row")
-    parser.add_argument("--az-value-mode", choices=("shaped", "winloss"),
+    parser.add_argument("--az-value-mode",
+                        choices=("shaped", "winloss", "blend"),
                         default="shaped",
                         help="value mode the --az net was trained with; the "
                              "eval search must match (a P(win) head searched "
