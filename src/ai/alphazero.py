@@ -70,6 +70,28 @@ from .policy import (
 VALUE_SCALE = 100.0
 
 
+# Value-target modes (the `--value-target` A/B). "shaped" is the historical
+# recipe: the value head regresses the discounted *shaped* return-to-go and the
+# search backs up per-step shaped rewards. Both 64- and 128-wide nets plateau at
+# it (= MCTS ~50%) because that target is really a *flame-count* predictor —
+# clears (+10 each, up to +360) swamp REWARD_WIN (+100), so a leaf that "clears
+# 30 then dies" scores nearly as high as one that wins, and PUCT can't rank the
+# winning branch above "die late clearing more". "winloss" replaces the target
+# and the search backup with the discounted *game outcome* (+1 win / -1 loss,
+# terminal only), so the value head learns P(win) and PUCT ranks on it — the
+# canonical AlphaZero signal, aimed straight at that ranking failure.
+VALUE_MODES = ("shaped", "winloss")
+
+
+def _value_scale(value_mode: str) -> float:
+    """Target/leaf scale for a value mode.
+
+    Shaped returns are O(100) so they are divided by :data:`VALUE_SCALE` to keep
+    the value loss O(1); outcome targets are already O(1), so no scaling.
+    """
+    return 1.0 if value_mode == "winloss" else VALUE_SCALE
+
+
 # --- Q-value normalisation (MuZero-style) -----------------------------------
 
 class _MinMaxStats:
@@ -123,12 +145,13 @@ class _Node:
 
 
 @torch.no_grad()
-def _evaluate(node: _Node, work: Game, net: ActorCritic) -> float:
+def _evaluate(node: _Node, work: Game, net: ActorCritic,
+              value_scale: float = VALUE_SCALE) -> float:
     """Expand ``node`` with the net's masked priors; return its value estimate.
 
     ``work`` must already be at ``node``'s state. Fills ``node.P/N/W`` over
     the legal actions and marks it expanded; returns ``V(s)`` (the
-    return-to-go estimate used as the leaf value in backup).
+    return-to-go / outcome estimate used as the leaf value in backup).
     """
     obs = torch.as_tensor(work.get_observation(), dtype=torch.float32)
     mask = torch.as_tensor(work.legal_actions(), dtype=torch.bool)
@@ -140,9 +163,9 @@ def _evaluate(node: _Node, work: Game, net: ActorCritic) -> float:
         node.N[a] = 0
         node.W[a] = 0.0
     node.expanded = True
-    # Head is trained in VALUE_SCALE units; the backup mixes this leaf value
+    # Head is trained in ``value_scale`` units; the backup mixes this leaf value
     # with per-edge rewards in raw units, so scale it back up here.
-    return float(value) * VALUE_SCALE
+    return float(value) * value_scale
 
 
 def _puct_select(node: _Node, c_puct: float, minmax: _MinMaxStats) -> int:
@@ -167,14 +190,21 @@ def _puct_select(node: _Node, c_puct: float, minmax: _MinMaxStats) -> int:
 
 
 def _simulate(root: _Node, work: Game, net: ActorCritic,
-              c_puct: float, gamma: float, minmax: _MinMaxStats) -> None:
+              c_puct: float, gamma: float, minmax: _MinMaxStats,
+              value_mode: str = "shaped") -> None:
     """One PUCT iteration: select to a leaf, expand+evaluate, back up return.
 
     Selection uses only cached edge stats (no stepping) until it chooses an
     action with no child yet; that action is expanded by stepping ``work`` once
     and evaluating the new leaf with the net. The discounted return
     (edge rewards + leaf value) then updates every edge on the path.
+
+    In ``"winloss"`` mode the per-edge reward is the discounted *outcome*
+    (``+1``/``-1`` on the terminal step, ``0`` otherwise) rather than the shaped
+    step reward, and the leaf value is the net's P(win) at unit scale — so the
+    whole backup measures "does this line win", matching the value target.
     """
+    value_scale = _value_scale(value_mode)
     node = root
     path: list[tuple[_Node, int]] = []
     leaf_value = 0.0
@@ -189,10 +219,13 @@ def _simulate(root: _Node, work: Game, net: ActorCritic,
         # Expand this edge: step the working game once and evaluate the leaf.
         work.set_state(node.state)
         reward, _ = work.step(a)
+        if value_mode == "winloss":
+            reward = (1.0 if work.won else -1.0) if work.done else 0.0
         node.edge_reward[a] = reward
         child = _Node(work)
         node.children[a] = child
-        leaf_value = 0.0 if child.done else _evaluate(child, work, net)
+        leaf_value = (0.0 if child.done
+                      else _evaluate(child, work, net, value_scale))
         break
     # Loop fell through without expanding (terminal reached): leaf stays 0.
 
@@ -212,18 +245,22 @@ def _visit_counts(root: _Node) -> dict[int, int]:
 # --- ActionFn (evaluation / play) -------------------------------------------
 
 def az_action_fn(net: ActorCritic, simulations: int = 100, c_puct: float = 1.5,
-                 gamma: float = 0.99, seed: int = 0) -> ActionFn:
+                 gamma: float = 0.99, seed: int = 0,
+                 value_mode: str = "shaped") -> ActionFn:
     """Wrap ``net`` as an :data:`ActionFn` that picks moves by PUCT search.
 
     Deterministic (most-visited root action), no root noise — the evaluation /
     viewer form. Reuses the same search as self-play with exploration disabled.
+    ``value_mode`` must match the net's training mode (a P(win) head searched
+    with shaped backup, or vice-versa, is incoherent).
     """
     rng = random.Random(seed)
 
     def act(game: Game) -> int:
         if game.done:
             return 0
-        root, _ = _search(game, net, simulations, c_puct, gamma, rng)
+        root, _ = _search(game, net, simulations, c_puct, gamma, rng,
+                          value_mode=value_mode)
         counts = _visit_counts(root)
         if not counts:
             legal = game.legal_actions()
@@ -235,11 +272,12 @@ def az_action_fn(net: ActorCritic, simulations: int = 100, c_puct: float = 1.5,
 
 def _search(game: Game, net: ActorCritic, simulations: int, c_puct: float,
             gamma: float, rng: random.Random,
-            dirichlet_alpha: float = 0.0) -> tuple[_Node, _MinMaxStats]:
+            dirichlet_alpha: float = 0.0,
+            value_mode: str = "shaped") -> tuple[_Node, _MinMaxStats]:
     """Run ``simulations`` PUCT iterations rooted at ``game``; return root."""
     work = game.clone()
     root = _Node(work)
-    _evaluate(root, work, net)
+    _evaluate(root, work, net, _value_scale(value_mode))
     if dirichlet_alpha > 0.0 and len(root.legal) > 1:
         samples = [rng.gammavariate(dirichlet_alpha, 1.0) for _ in root.legal]
         s = sum(samples) or 1.0
@@ -247,7 +285,7 @@ def _search(game: Game, net: ActorCritic, simulations: int, c_puct: float,
             root.P[a] = 0.75 * root.P[a] + 0.25 * (g / s)
     minmax = _MinMaxStats()
     for _ in range(simulations):
-        _simulate(root, work, net, c_puct, gamma, minmax)
+        _simulate(root, work, net, c_puct, gamma, minmax, value_mode)
     return root, minmax
 
 
@@ -263,6 +301,30 @@ class _Sample:
     value: float = 0.0        # filled with return-to-go after the game
 
 
+def _fill_value_targets(samples: list["_Sample"], rewards: list[float],
+                        won: bool, gamma: float, value_mode: str) -> None:
+    """Fill each sample's value target with the discounted return-to-go.
+
+    ``"shaped"`` discounts the per-step shaped ``rewards``; ``"winloss"``
+    discounts a stream that is ``0`` everywhere except the terminal step, which
+    carries the game outcome (``+1`` won / ``-1`` otherwise) — so a sample's
+    target is ``±gamma**(plies-to-end)``, a pure P(win) signal.
+    """
+    if value_mode == "winloss":
+        stream = [0.0] * len(rewards)
+        if stream:
+            stream[-1] = 1.0 if won else -1.0
+    else:
+        stream = rewards
+    g = 0.0
+    returns: list[float] = [0.0] * len(stream)
+    for t in reversed(range(len(stream))):
+        g = stream[t] + gamma * g
+        returns[t] = g
+    for i, sample in enumerate(samples):
+        sample.value = returns[i] if i < len(returns) else 0.0
+
+
 def self_play_game(net: ActorCritic, seed: int, simulations: int,
                    c_puct: float,
                    gamma: float, rng: random.Random, num_actions: int,
@@ -272,6 +334,7 @@ def self_play_game(net: ActorCritic, seed: int, simulations: int,
                    spawn_formation: str | None = None,
                    dirichlet_alpha: float = 0.3,
                    temp_moves: int = 12,
+                   value_mode: str = "shaped",
                    max_steps: int = 500) -> tuple[list[_Sample], bool]:
     """Play one self-play game; return ``(samples, won)``.
 
@@ -279,7 +342,8 @@ def self_play_game(net: ActorCritic, seed: int, simulations: int,
     from the visit counts (temperature 1 for the first ``temp_moves`` plies,
     greedy after) so early exploration is broad but the endgame is sharp. The
     per-move visit distribution is the policy target; value targets are the
-    discounted return-to-go, filled in once the game ends.
+    discounted return-to-go (shaped) or game outcome (``value_mode="winloss"``),
+    filled in once the game ends.
     """
     game = Game(Player(*constant.BASE_PLAYER_POS), seed=seed,
                 num_waves=num_waves, flames_per_wave=flames_per_wave,
@@ -291,7 +355,8 @@ def self_play_game(net: ActorCritic, seed: int, simulations: int,
         if game.done:
             break
         root, _ = _search(game, net, simulations, c_puct, gamma, rng,
-                          dirichlet_alpha=dirichlet_alpha)
+                          dirichlet_alpha=dirichlet_alpha,
+                          value_mode=value_mode)
         counts = _visit_counts(root)
         if not counts:
             legal = game.legal_actions()
@@ -314,15 +379,9 @@ def self_play_game(net: ActorCritic, seed: int, simulations: int,
         reward, _ = game.step(action)
         rewards.append(reward)
 
-    # Discounted return-to-go as the value target for every recorded state.
-    # Samples are recorded before their move, so sample i owns rewards[i:].
-    g = 0.0
-    returns: list[float] = [0.0] * len(rewards)
-    for t in reversed(range(len(rewards))):
-        g = rewards[t] + gamma * g
-        returns[t] = g
-    for i, sample in enumerate(samples):
-        sample.value = returns[i] if i < len(returns) else 0.0
+    # Value target for every recorded state (samples are recorded before their
+    # move, so sample i owns rewards[i:]).
+    _fill_value_targets(samples, rewards, game.won, gamma, value_mode)
     return samples, game.won
 
 
@@ -333,6 +392,7 @@ def mcts_bootstrap_game(seed: int, simulations: int, gamma: float,
                         spawn_radius: int | None = None,
                         spawn_formation: str | None = None,
                         rollout_depth: int = 16,
+                        value_mode: str = "shaped",
                         max_steps: int = 500) -> tuple[list[_Sample], bool]:
     """Play one game with **MCTS** and record it as AlphaZero training samples.
 
@@ -373,13 +433,7 @@ def mcts_bootstrap_game(seed: int, simulations: int, gamma: float,
         reward, _ = game.step(action)
         rewards.append(reward)
 
-    g = 0.0
-    returns: list[float] = [0.0] * len(rewards)
-    for t in reversed(range(len(rewards))):
-        g = rewards[t] + gamma * g
-        returns[t] = g
-    for i, sample in enumerate(samples):
-        sample.value = returns[i] if i < len(returns) else 0.0
+    _fill_value_targets(samples, rewards, game.won, gamma, value_mode)
     return samples, game.won
 
 
@@ -405,6 +459,7 @@ class AZConfig:
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
     value_coef: float = 1.0         # value-loss weight relative to policy loss
+    value_mode: str = "shaped"      # "shaped" | "winloss" (the --value-target A/B)
     hidden: int = 64
     seed: int = 1
     eval_every: int = 5
@@ -458,7 +513,8 @@ def _update(net: ActorCritic, optimizer: optim.Optimizer,
                             device=dev)
         pi = torch.tensor([s.pi for s in batch], dtype=torch.float32,
                           device=dev)
-        z = torch.tensor([s.value / VALUE_SCALE for s in batch],
+        vscale = _value_scale(cfg.value_mode)
+        z = torch.tensor([s.value / vscale for s in batch],
                          dtype=torch.float32, device=dev)
         logits, value = net(obs)
         logp = torch.log_softmax(logits.masked_fill(~mask, MASK_FILL), dim=-1)
@@ -536,7 +592,7 @@ def train(cfg: AZConfig) -> ActorCritic:
                 simulations=cfg.bootstrap_simulations, gamma=cfg.gamma,
                 rng=rng, num_actions=num_actions,
                 num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
-                spawn_formation=fm)
+                spawn_formation=fm, value_mode=cfg.value_mode)
             buffer.extend(samples)
             wins += int(won)
         print(f"Bootstrapped {cfg.bootstrap_games} MCTS games at "
@@ -559,7 +615,8 @@ def train(cfg: AZConfig) -> ActorCritic:
                 gamma=cfg.gamma, rng=rng, num_actions=num_actions,
                 num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
                 spawn_formation=fm,
-                dirichlet_alpha=cfg.dirichlet_alpha, temp_moves=cfg.temp_moves)
+                dirichlet_alpha=cfg.dirichlet_alpha, temp_moves=cfg.temp_moves,
+                value_mode=cfg.value_mode)
             buffer.extend(samples)
             wins += int(won)
 
@@ -571,7 +628,8 @@ def train(cfg: AZConfig) -> ActorCritic:
         if iteration % cfg.eval_every == 0 or iteration == cfg.iterations:
             net.eval()
             act = az_action_fn(net, simulations=cfg.eval_simulations,
-                               c_puct=cfg.c_puct, gamma=cfg.gamma)
+                               c_puct=cfg.c_puct, gamma=cfg.gamma,
+                               value_mode=cfg.value_mode)
             mean_reward, win_rate, parts = _eval_action_fn(
                 act, cfg.eval_seeds, nw, fpw, sr, fm)
             stage_tag = (f" | stage {stage_idx}/{len(stages) - 1} "

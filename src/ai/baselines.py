@@ -145,7 +145,8 @@ def benchmark(policy_path: str | None = None,
               seeds: list[int] = EVAL_SEEDS,
               mcts_sims: int | None = None,
               az_path: str | None = None,
-              az_sims: int = 120) -> dict[str, dict[str, float]]:
+              az_sims: int = 120,
+              az_value_mode: str = "shaped") -> dict[str, dict[str, float]]:
     """Score every baseline (plus a trained policy if given); print a table.
 
     ``mcts_sims`` (opt-in — the MCTS agent is orders of magnitude slower than
@@ -171,7 +172,8 @@ def benchmark(policy_path: str | None = None,
         from .policy import load_policy
         from .alphazero import az_action_fn
         policies["alphazero"] = az_action_fn(load_policy(az_path),
-                                             simulations=az_sims)
+                                             simulations=az_sims,
+                                             value_mode=az_value_mode)
     elif az_path:
         print(f"(no AZ policy at {az_path}; skipping alphazero row)\n")
 
@@ -195,10 +197,16 @@ def main() -> None:
                              "checkpoint (net-guided PUCT; slow, use --seeds)")
     parser.add_argument("--az-sims", type=int, default=120,
                         help="PUCT sims/move for the --az row")
+    parser.add_argument("--az-value-mode", choices=("shaped", "winloss"),
+                        default="shaped",
+                        help="value mode the --az net was trained with; the "
+                             "eval search must match (a P(win) head searched "
+                             "with shaped backup is incoherent)")
     args = parser.parse_args()
     seeds = EVAL_SEEDS[:args.seeds] if args.seeds else EVAL_SEEDS
     benchmark(args.policy, seeds=seeds, mcts_sims=args.mcts_sims,
-              az_path=args.az, az_sims=args.az_sims)
+              az_path=args.az, az_sims=args.az_sims,
+              az_value_mode=args.az_value_mode)
 
 
 if __name__ == "__main__":

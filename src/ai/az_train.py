@@ -40,6 +40,15 @@ def main() -> None:
                              "imitate; self-play never wins the full game)")
     parser.add_argument("--bootstrap-simulations", type=int, default=300,
                         help="MCTS sims/move for the bootstrap games")
+    parser.add_argument("--value-target", choices=("shaped", "winloss"),
+                        default="shaped",
+                        help="value-head target: 'shaped' (discounted shaped "
+                             "return, the historical recipe) or 'winloss' "
+                             "(discounted game outcome ±1 — the A/B aimed at the "
+                             "~50%% plateau). Use a distinct --out/--checkpoint "
+                             "for a winloss run so it never clobbers az.pt; a "
+                             "checkpoint stores no mode, so --resume it with the "
+                             "same --value-target.")
     parser.add_argument("--c-puct", type=float, default=1.5)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--hidden", type=int, default=64,
@@ -79,6 +88,7 @@ def main() -> None:
         bootstrap_simulations=args.bootstrap_simulations,
         c_puct=args.c_puct,
         learning_rate=args.lr,
+        value_mode=args.value_target,
         hidden=args.hidden,
         seed=args.seed,
         eval_every=args.eval_every,
@@ -92,7 +102,7 @@ def main() -> None:
     mode = f"resuming from {resume_from}" if resume_from else "fresh run"
     print(f"Training AlphaZero ({mode}): {cfg.iterations} iters, "
           f"{cfg.games_per_iter} games/iter x {cfg.simulations} sims/move, "
-          f"device={cfg.device}", flush=True)
+          f"value-target={cfg.value_mode}, device={cfg.device}", flush=True)
     train(cfg)
     print(f"Done. Best policy: {args.out} | checkpoint: {args.checkpoint}")
 
