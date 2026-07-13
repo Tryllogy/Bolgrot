@@ -70,6 +70,16 @@ def main() -> None:
                              "'blend' it does not poison the value near a "
                              "death. Do NOT also raise REWARD_CLEAR_FLAME: it "
                              "widens the very near-win band this fights.")
+    parser.add_argument("--value-scale", type=float, default=None,
+                        help="override alphazero.VALUE_SCALE (default 100). "
+                             "MUST scale with --reward-win: the value target "
+                             "is divided by VALUE_SCALE to keep the value loss "
+                             "O(1), so a larger REWARD_WIN needs a proportional "
+                             "VALUE_SCALE (e.g. --reward-win 800 --value-scale "
+                             "800) or the value gradient explodes and crushes "
+                             "the policy head (p_loss rises, prior de-sharpens). "
+                             "It is pure normalisation — it does NOT change the "
+                             "win/clear ranking, which lives in the raw reward.")
     parser.add_argument("--c-puct", type=float, default=1.5)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--hidden", type=int, default=64,
@@ -100,6 +110,12 @@ def main() -> None:
     if args.reward_win is not None:
         from .. import constant
         constant.REWARD_WIN = args.reward_win
+    # VALUE_SCALE is a module global read at call time in alphazero's search /
+    # update, so overriding it here applies everywhere. Pair it with
+    # --reward-win to keep the (now larger) value target O(1).
+    if args.value_scale is not None:
+        from . import alphazero
+        alphazero.VALUE_SCALE = args.value_scale
 
     if args.resume is None:
         resume_from = ""
@@ -130,6 +146,8 @@ def main() -> None:
     )
     mode = f"resuming from {resume_from}" if resume_from else "fresh run"
     rwin = "" if args.reward_win is None else f", REWARD_WIN={args.reward_win}"
+    if args.value_scale is not None:
+        rwin += f", VALUE_SCALE={args.value_scale}"
     print(f"Training AlphaZero ({mode}): {cfg.iterations} iters, "
           f"{cfg.games_per_iter} games/iter x {cfg.simulations} sims/move, "
           f"value-target={cfg.value_mode}{rwin}, device={cfg.device}",

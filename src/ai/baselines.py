@@ -209,10 +209,17 @@ def main() -> None:
                              "backup uses env rewards, so the eval must use the "
                              "same value; the win *rate* is unaffected, but the "
                              "search behaviour and the reward columns are not)")
+    parser.add_argument("--value-scale", type=float, default=None,
+                        help="override alphazero.VALUE_SCALE to match a net "
+                             "trained with `az_train --value-scale` (the eval "
+                             "search scales the value head back up by it)")
     args = parser.parse_args()
     if args.reward_win is not None:
         from .. import constant
         constant.REWARD_WIN = args.reward_win
+    if args.value_scale is not None:
+        from . import alphazero
+        alphazero.VALUE_SCALE = args.value_scale
     seeds = EVAL_SEEDS[:args.seeds] if args.seeds else EVAL_SEEDS
     benchmark(args.policy, seeds=seeds, mcts_sims=args.mcts_sims,
               az_path=args.az, az_sims=args.az_sims,
