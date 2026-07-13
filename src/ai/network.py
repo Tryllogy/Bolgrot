@@ -30,11 +30,17 @@ class ActorCritic(nn.Module):
     """Shared-trunk policy/value network with action masking."""
 
     def __init__(self, obs_size: int, num_actions: int,
-                 hidden: int = 64) -> None:
+                 hidden: int = 64, value_dim: int = 1) -> None:
         super().__init__()
         self.obs_size = obs_size
         self.num_actions = num_actions
         self.hidden = hidden
+        # value_dim=1 is the usual single state-value head. value_dim=2 is the
+        # AlphaZero "twohead" value target (src/ai/alphazero.py): head 0 is the
+        # dense shaped return, head 1 is P(win) — kept separate so the win
+        # signal never spikes the shaped estimate near a terminal (the failure
+        # of the single-head "blend" mode).
+        self.value_dim = value_dim
         self.trunk = nn.Sequential(
             _layer_init(nn.Linear(obs_size, hidden)), nn.Tanh(),
             _layer_init(nn.Linear(hidden, hidden)), nn.Tanh(),
@@ -42,12 +48,20 @@ class ActorCritic(nn.Module):
         # Small policy-head gain keeps the initial policy near-uniform; unit
         # gain on the value head is the usual choice.
         self.policy_head = _layer_init(nn.Linear(hidden, num_actions), std=0.01)
-        self.value_head = _layer_init(nn.Linear(hidden, 1), std=1.0)
+        self.value_head = _layer_init(nn.Linear(hidden, value_dim), std=1.0)
 
     def forward(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Return ``(logits, value)`` for a batch of observations."""
+        """Return ``(logits, value)`` for a batch of observations.
+
+        ``value`` is squeezed to a scalar per state when ``value_dim == 1``
+        (the single-head case, unchanged); for ``value_dim > 1`` it keeps its
+        trailing head axis (``[..., value_dim]``).
+        """
         h = self.trunk(obs)
-        return self.policy_head(h), self.value_head(h).squeeze(-1)
+        value = self.value_head(h)
+        if self.value_dim == 1:
+            value = value.squeeze(-1)
+        return self.policy_head(h), value
 
     def _dist(self, obs: torch.Tensor, mask: torch.Tensor
               ) -> tuple[Categorical, torch.Tensor]:

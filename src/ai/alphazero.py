@@ -91,7 +91,24 @@ VALUE_SCALE = 100.0
 # both the search edges and the value target — enough to lift a win clear of the
 # best near-win, which is the separation shaped alone lacks. Dense guidance of
 # shaped + the win/near-win ranking winloss was after, without winloss's sparsity.
-VALUE_MODES = ("shaped", "winloss", "blend")
+# Measured (2026-07-13): blend avoids winloss's passive collapse (stall stayed
+# modest, clear ~100, self-play won the full game ~12%) but at equal budget
+# scores 0/6 — *worse* than shaped's 3/6. The terminal ±300 spike folded into
+# the *single* shaped value target poisons the value estimate near a terminal
+# (a state one avoidable-death away is dragged toward -300·gamma), so the net
+# learns to avoid death without learning to finish; it clears fewer flames than
+# plain shaped.
+#
+# "twohead" is the fix for that: keep the shaped value target *clean* (no
+# terminal spike) on one value head, and learn P(win) (the ±1 outcome) on a
+# *second* head. The search combines them at a leaf as
+# ``V_shaped·VALUE_SCALE + TWOHEAD_WIN_WEIGHT·P(win)`` and adds the same
+# ±TWOHEAD_WIN_WEIGHT to a terminal edge, so a win still outranks the best
+# near-win (the winloss/blend goal) — but the ranking pressure lives in the
+# bounded P(win) head and never distorts the dense shaped estimate that drives
+# exploration. Needs a fresh run: the value head has 2 outputs, so the width is
+# baked into the checkpoint (value_dim), like `hidden`.
+VALUE_MODES = ("shaped", "winloss", "blend", "twohead")
 
 # Raw-reward bonus added to the terminal step in "blend" mode (+win / -loss).
 # Sized above the clear-count spread (~±360) so the outcome dominates the value
@@ -99,6 +116,12 @@ VALUE_MODES = ("shaped", "winloss", "blend")
 # then die". The value scale is raised in step so the (larger) target stays O(1).
 BLEND_TERMINAL_BONUS = 300.0
 BLEND_VALUE_SCALE = 300.0
+
+# "twohead" mixing weight λ: raw-reward weight on the P(win) head in the leaf
+# value and on the terminal edge. Same magnitude as BLEND_TERMINAL_BONUS (above
+# the clear spread) so a near-certain win lifts a leaf clear of the best
+# near-win. The shaped head keeps VALUE_SCALE; the P(win) head is O(1) already.
+TWOHEAD_WIN_WEIGHT = 300.0
 
 
 def _value_scale(value_mode: str) -> float:
@@ -167,9 +190,23 @@ class _Node:
         self.children: dict[int, "_Node"] = {}
 
 
+def _leaf_value(value: torch.Tensor, value_mode: str) -> float:
+    """Raw-reward leaf value from the net's value output for ``value_mode``.
+
+    Single-head modes ("shaped"/"winloss"/"blend") scale the scalar head back up
+    to raw reward units. "twohead" combines the two heads:
+    ``V_shaped·VALUE_SCALE + TWOHEAD_WIN_WEIGHT·P(win)`` — the dense shaped
+    estimate plus a bounded win-ranking term.
+    """
+    if value_mode == "twohead":
+        return (float(value[0]) * VALUE_SCALE
+                + TWOHEAD_WIN_WEIGHT * float(value[1]))
+    return float(value) * _value_scale(value_mode)
+
+
 @torch.no_grad()
 def _evaluate(node: _Node, work: Game, net: ActorCritic,
-              value_scale: float = VALUE_SCALE) -> float:
+              value_mode: str = "shaped") -> float:
     """Expand ``node`` with the net's masked priors; return its value estimate.
 
     ``work`` must already be at ``node``'s state. Fills ``node.P/N/W`` over
@@ -186,9 +223,9 @@ def _evaluate(node: _Node, work: Game, net: ActorCritic,
         node.N[a] = 0
         node.W[a] = 0.0
     node.expanded = True
-    # Head is trained in ``value_scale`` units; the backup mixes this leaf value
-    # with per-edge rewards in raw units, so scale it back up here.
-    return float(value) * value_scale
+    # Head(s) trained in scaled units; the backup mixes this leaf value with
+    # per-edge rewards in raw units, so convert back to raw units here.
+    return _leaf_value(value, value_mode)
 
 
 def _puct_select(node: _Node, c_puct: float, minmax: _MinMaxStats) -> int:
@@ -228,8 +265,9 @@ def _simulate(root: _Node, work: Game, net: ActorCritic,
     whole backup measures "does this line win", matching the value target.
     In ``"blend"`` mode edges stay shaped (dense guidance) but a terminal step
     gets an extra ``±BLEND_TERMINAL_BONUS`` so wins outrank near-wins.
+    ``"twohead"`` likewise keeps shaped edges and adds ``±TWOHEAD_WIN_WEIGHT``
+    on a terminal step, matching the P(win) leaf term's scale.
     """
-    value_scale = _value_scale(value_mode)
     node = root
     path: list[tuple[_Node, int]] = []
     leaf_value = 0.0
@@ -248,11 +286,13 @@ def _simulate(root: _Node, work: Game, net: ActorCritic,
             reward = (1.0 if work.won else -1.0) if work.done else 0.0
         elif value_mode == "blend" and work.done:
             reward += BLEND_TERMINAL_BONUS if work.won else -BLEND_TERMINAL_BONUS
+        elif value_mode == "twohead" and work.done:
+            reward += TWOHEAD_WIN_WEIGHT if work.won else -TWOHEAD_WIN_WEIGHT
         node.edge_reward[a] = reward
         child = _Node(work)
         node.children[a] = child
         leaf_value = (0.0 if child.done
-                      else _evaluate(child, work, net, value_scale))
+                      else _evaluate(child, work, net, value_mode))
         break
     # Loop fell through without expanding (terminal reached): leaf stays 0.
 
@@ -304,7 +344,7 @@ def _search(game: Game, net: ActorCritic, simulations: int, c_puct: float,
     """Run ``simulations`` PUCT iterations rooted at ``game``; return root."""
     work = game.clone()
     root = _Node(work)
-    _evaluate(root, work, net, _value_scale(value_mode))
+    _evaluate(root, work, net, value_mode)
     if dirichlet_alpha > 0.0 and len(root.legal) > 1:
         samples = [rng.gammavariate(dirichlet_alpha, 1.0) for _ in root.legal]
         s = sum(samples) or 1.0
@@ -320,17 +360,33 @@ def _search(game: Game, net: ActorCritic, simulations: int, c_puct: float,
 
 @dataclass
 class _Sample:
-    """One training example: state, legal mask, search policy, value target."""
+    """One training example: state, legal mask, search policy, value target(s).
+
+    ``value`` is the value-head target (return-to-go); ``value_win`` is the
+    second head's P(win) target, used only by ``value_mode="twohead"`` (left at
+    ``0.0`` and ignored by the single-head modes).
+    """
 
     obs: list[float]
     mask: list[bool]
     pi: list[float]           # visit distribution over ALL actions
     value: float = 0.0        # filled with return-to-go after the game
+    value_win: float = 0.0    # twohead only: discounted ±1 outcome target
+
+
+def _discounted_returns(stream: list[float], gamma: float) -> list[float]:
+    """Return-to-go of ``stream`` under ``gamma`` (same length as ``stream``)."""
+    g = 0.0
+    returns: list[float] = [0.0] * len(stream)
+    for t in reversed(range(len(stream))):
+        g = stream[t] + gamma * g
+        returns[t] = g
+    return returns
 
 
 def _fill_value_targets(samples: list["_Sample"], rewards: list[float],
                         won: bool, gamma: float, value_mode: str) -> None:
-    """Fill each sample's value target with the discounted return-to-go.
+    """Fill each sample's value target(s) with the discounted return-to-go.
 
     ``"shaped"`` discounts the per-step shaped ``rewards``; ``"winloss"``
     discounts a stream that is ``0`` everywhere except the terminal step, which
@@ -338,22 +394,33 @@ def _fill_value_targets(samples: list["_Sample"], rewards: list[float],
     target is ``±gamma**(plies-to-end)``, a pure P(win) signal. ``"blend"``
     keeps the shaped stream but adds ``±BLEND_TERMINAL_BONUS`` to the terminal
     step, so the target is the dense shaped return lifted by a strong outcome.
+    ``"twohead"`` fills *both* targets: ``value`` = the *clean* shaped return
+    (no terminal spike) and ``value_win`` = the discounted ±1 outcome, so the
+    two heads learn the dense estimate and P(win) independently.
     """
+    outcome = 1.0 if won else -1.0
+    if value_mode == "twohead":
+        shaped_returns = _discounted_returns(rewards, gamma)
+        win_stream = [0.0] * len(rewards)
+        if win_stream:
+            win_stream[-1] = outcome
+        win_returns = _discounted_returns(win_stream, gamma)
+        for i, sample in enumerate(samples):
+            sample.value = shaped_returns[i] if i < len(shaped_returns) else 0.0
+            sample.value_win = win_returns[i] if i < len(win_returns) else 0.0
+        return
+
     if value_mode == "winloss":
         stream = [0.0] * len(rewards)
         if stream:
-            stream[-1] = 1.0 if won else -1.0
+            stream[-1] = outcome
     elif value_mode == "blend":
         stream = list(rewards)
         if stream:
             stream[-1] += BLEND_TERMINAL_BONUS if won else -BLEND_TERMINAL_BONUS
     else:
         stream = rewards
-    g = 0.0
-    returns: list[float] = [0.0] * len(stream)
-    for t in reversed(range(len(stream))):
-        g = stream[t] + gamma * g
-        returns[t] = g
+    returns = _discounted_returns(stream, gamma)
     for i, sample in enumerate(samples):
         sample.value = returns[i] if i < len(returns) else 0.0
 
@@ -492,7 +559,7 @@ class AZConfig:
     learning_rate: float = 1e-3
     weight_decay: float = 1e-4
     value_coef: float = 1.0         # value-loss weight relative to policy loss
-    value_mode: str = "shaped"      # "shaped" | "winloss" (the --value-target A/B)
+    value_mode: str = "shaped"      # "shaped"|"winloss"|"blend"|"twohead"
     hidden: int = 64
     seed: int = 1
     eval_every: int = 5
@@ -516,6 +583,7 @@ def _save_az_checkpoint(path: str, net: ActorCritic,
             "obs_size": net.obs_size,
             "num_actions": net.num_actions,
             "hidden": net.hidden,
+            "value_dim": net.value_dim,
             "optimizer": optimizer.state_dict(),
             "iteration": iteration,
             "best_score": best_score,
@@ -530,11 +598,14 @@ def _update(net: ActorCritic, optimizer: optim.Optimizer,
     """Run ``cfg.update_steps`` SGD steps; return mean (p_loss, v_loss).
 
     Policy loss is the cross-entropy of the net's masked policy against the
-    search visit distribution; value loss is MSE against the return-to-go.
+    search visit distribution; value loss is MSE against the return-to-go. In
+    ``"twohead"`` mode the value loss sums the two heads' MSEs (shaped return on
+    head 0, P(win) on head 1); the reported ``v_loss`` is that sum.
     """
     if len(buffer) < cfg.batch_size:
         return float("nan"), float("nan")
     net.train()
+    twohead = cfg.value_mode == "twohead"
     data = list(buffer)
     p_tot = v_tot = 0.0
     for _ in range(cfg.update_steps):
@@ -546,13 +617,22 @@ def _update(net: ActorCritic, optimizer: optim.Optimizer,
                             device=dev)
         pi = torch.tensor([s.pi for s in batch], dtype=torch.float32,
                           device=dev)
-        vscale = _value_scale(cfg.value_mode)
-        z = torch.tensor([s.value / vscale for s in batch],
-                         dtype=torch.float32, device=dev)
         logits, value = net(obs)
         logp = torch.log_softmax(logits.masked_fill(~mask, MASK_FILL), dim=-1)
         policy_loss = -(pi * logp).sum(dim=-1).mean()
-        value_loss = F.mse_loss(value, z)
+        if twohead:
+            # Head 0 regresses the clean shaped return (in VALUE_SCALE units);
+            # head 1 regresses the discounted ±1 outcome (already O(1)).
+            z_shaped = torch.tensor([s.value / VALUE_SCALE for s in batch],
+                                    dtype=torch.float32, device=dev)
+            z_win = torch.tensor([s.value_win for s in batch],
+                                 dtype=torch.float32, device=dev)
+            value_loss = (F.mse_loss(value[:, 0], z_shaped)
+                          + F.mse_loss(value[:, 1], z_win))
+        else:
+            z = torch.tensor([s.value / _value_scale(cfg.value_mode)
+                              for s in batch], dtype=torch.float32, device=dev)
+            value_loss = F.mse_loss(value, z)
         loss = policy_loss + cfg.value_coef * value_loss
         optimizer.zero_grad()
         loss.backward()
@@ -576,7 +656,11 @@ def train(cfg: AZConfig) -> ActorCritic:
 
     obs_size = Game.observation_size()
     num_actions = Game.num_actions()
-    net = ActorCritic(obs_size, num_actions, cfg.hidden).to(cfg.device)
+    # "twohead" needs a second value output (shaped + P(win)); baked into the
+    # checkpoint like `hidden`, so it cannot resume a single-head checkpoint.
+    value_dim = 2 if cfg.value_mode == "twohead" else 1
+    net = ActorCritic(obs_size, num_actions, cfg.hidden,
+                      value_dim=value_dim).to(cfg.device)
     optimizer = optim.Adam(net.parameters(), lr=cfg.learning_rate,
                            weight_decay=cfg.weight_decay)
 
@@ -590,7 +674,8 @@ def train(cfg: AZConfig) -> ActorCritic:
                           weights_only=True)
         if (ckpt["obs_size"] != obs_size
                 or ckpt["num_actions"] != num_actions
-                or ckpt.get("hidden") != cfg.hidden):
+                or ckpt.get("hidden") != cfg.hidden
+                or ckpt.get("value_dim", 1) != value_dim):
             raise SystemExit("Checkpoint shape mismatch — train fresh.")
         net.load_state_dict(ckpt["state_dict"])
         if "optimizer" in ckpt:

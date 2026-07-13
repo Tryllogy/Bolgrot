@@ -157,6 +157,7 @@ def save_policy(net: ActorCritic, path: str) -> None:
             "obs_size": net.obs_size,
             "num_actions": net.num_actions,
             "hidden": net.hidden,
+            "value_dim": net.value_dim,
         },
         path,
     )
@@ -165,7 +166,8 @@ def save_policy(net: ActorCritic, path: str) -> None:
 def load_policy(path: str, device: str = "cpu") -> ActorCritic:
     """Rebuild an :class:`ActorCritic` saved by :func:`save_policy`."""
     ckpt = torch.load(path, map_location=device, weights_only=True)
-    net = ActorCritic(ckpt["obs_size"], ckpt["num_actions"], ckpt["hidden"])
+    net = ActorCritic(ckpt["obs_size"], ckpt["num_actions"], ckpt["hidden"],
+                      value_dim=ckpt.get("value_dim", 1))
     net.load_state_dict(ckpt["state_dict"])
     net.to(device)
     net.eval()

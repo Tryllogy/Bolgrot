@@ -41,17 +41,20 @@ def main() -> None:
     parser.add_argument("--bootstrap-simulations", type=int, default=300,
                         help="MCTS sims/move for the bootstrap games")
     parser.add_argument("--value-target",
-                        choices=("shaped", "winloss", "blend"),
+                        choices=("shaped", "winloss", "blend", "twohead"),
                         default="shaped",
                         help="value-head target: 'shaped' (discounted shaped "
                              "return, the historical recipe), 'winloss' "
                              "(discounted game outcome ±1 — collapses on the "
-                             "full game, sparse), or 'blend' (dense shaped "
-                             "return + a large terminal ±bonus, the A/B aimed "
-                             "at the ~50%% plateau). Use a distinct "
-                             "--out/--checkpoint so a run never clobbers az.pt; "
-                             "a checkpoint stores no mode, so --resume it with "
-                             "the same --value-target.")
+                             "full game, sparse), 'blend' (dense shaped "
+                             "return + a large terminal ±bonus — avoids the "
+                             "collapse but 0/6, the terminal spike poisons the "
+                             "value near death), or 'twohead' (separate shaped "
+                             "+ P(win) value heads — the ranking without the "
+                             "spike; needs a fresh run, value_dim=2). Use a "
+                             "distinct --out/--checkpoint so a run never "
+                             "clobbers az.pt; a checkpoint stores no mode, so "
+                             "--resume it with the same --value-target.")
     parser.add_argument("--c-puct", type=float, default=1.5)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--hidden", type=int, default=64,
