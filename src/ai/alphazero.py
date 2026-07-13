@@ -554,6 +554,16 @@ class AZConfig:
     dirichlet_alpha: float = 0.3    # root exploration noise
     temp_moves: int = 12            # plies sampled from visits before greedy
     buffer_size: int = 20_000       # replay buffer capacity (samples)
+    # Persistent win buffer (the "buffer lever"). The main buffer is a rolling
+    # window: wins are ~0.3% of samples and evict within ~40 iters, so their
+    # signal is washed out (measured: reward/ranking variants clear ~24 flames
+    # but win 0/12 — the net learns to play, never to finish). A separate
+    # win-only buffer that never evicts, from which a fixed fraction of every
+    # minibatch is drawn, keeps winning trajectories (self-play *and* the MCTS
+    # bootstrap's) permanently represented. 0.0 = off (byte-for-byte the old
+    # behaviour: no win buffer maintained, minibatch is the plain rolling draw).
+    win_buffer_fraction: float = 0.0  # share of each batch from the win buffer
+    win_buffer_size: int = 40_000     # win-buffer capacity (>> a run's wins)
     batch_size: int = 128           # SGD minibatch (skips update until filled)
     update_steps: int = 64          # SGD minibatches per iteration
     learning_rate: float = 1e-3
@@ -594,22 +604,33 @@ def _save_az_checkpoint(path: str, net: ActorCritic,
 
 
 def _update(net: ActorCritic, optimizer: optim.Optimizer,
-            buffer: deque, cfg: AZConfig, rng: random.Random) -> tuple:
+            buffer: deque, cfg: AZConfig, rng: random.Random,
+            win_buffer: deque | None = None) -> tuple:
     """Run ``cfg.update_steps`` SGD steps; return mean (p_loss, v_loss).
 
     Policy loss is the cross-entropy of the net's masked policy against the
     search visit distribution; value loss is MSE against the return-to-go. In
     ``"twohead"`` mode the value loss sums the two heads' MSEs (shaped return on
     head 0, P(win) on head 1); the reported ``v_loss`` is that sum.
+
+    When ``win_buffer`` is non-empty and ``cfg.win_buffer_fraction > 0``, that
+    fraction of each minibatch is drawn (with replacement) from the persistent
+    win buffer and the rest from the rolling ``buffer``; with fraction 0 or an
+    empty win buffer the draw is the plain rolling sample (unchanged).
     """
     if len(buffer) < cfg.batch_size:
         return float("nan"), float("nan")
     net.train()
     twohead = cfg.value_mode == "twohead"
     data = list(buffer)
+    win_data = list(win_buffer) if win_buffer else []
+    n_win = round(cfg.batch_size * cfg.win_buffer_fraction) if win_data else 0
+    n_main = cfg.batch_size - n_win
     p_tot = v_tot = 0.0
     for _ in range(cfg.update_steps):
-        batch = rng.sample(data, cfg.batch_size)
+        batch = rng.sample(data, n_main)
+        if n_win:
+            batch = batch + rng.choices(win_data, k=n_win)
         dev = cfg.device
         obs = torch.tensor([s.obs for s in batch], dtype=torch.float32,
                            device=dev)
@@ -690,6 +711,10 @@ def train(cfg: AZConfig) -> ActorCritic:
         list(cfg.curriculum) if cfg.curriculum else [(None, None, None)])
     stage_idx = min(stage_idx, len(stages) - 1)
     buffer: deque = deque(maxlen=cfg.buffer_size)
+    # Persistent win-only buffer (the buffer lever); empty/unused when the
+    # fraction is 0. Fed by winning self-play AND bootstrap games below.
+    win_buffer: deque = deque(maxlen=cfg.win_buffer_size)
+    use_win_buffer = cfg.win_buffer_fraction > 0.0
 
     def bootstrap(idx: int) -> None:
         """Seed the buffer with MCTS games at stage ``idx``.
@@ -712,6 +737,8 @@ def train(cfg: AZConfig) -> ActorCritic:
                 num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
                 spawn_formation=fm, value_mode=cfg.value_mode)
             buffer.extend(samples)
+            if use_win_buffer and won:
+                win_buffer.extend(samples)
             wins += int(won)
         print(f"Bootstrapped {cfg.bootstrap_games} MCTS games at "
               f"{cfg.bootstrap_simulations} sims (stage {idx}): "
@@ -736,13 +763,17 @@ def train(cfg: AZConfig) -> ActorCritic:
                 dirichlet_alpha=cfg.dirichlet_alpha, temp_moves=cfg.temp_moves,
                 value_mode=cfg.value_mode)
             buffer.extend(samples)
+            if use_win_buffer and won:
+                win_buffer.extend(samples)
             wins += int(won)
 
         # --- Update ----------------------------------------------------
-        p_loss, v_loss = _update(net, optimizer, buffer, cfg, rng)
+        p_loss, v_loss = _update(net, optimizer, buffer, cfg, rng,
+                                 win_buffer if use_win_buffer else None)
 
         # --- Eval / checkpoint -----------------------------------------
         sp_win = wins / cfg.games_per_iter
+        wbuf_tag = f" | wbuf {len(win_buffer):5d}" if use_win_buffer else ""
         if iteration % cfg.eval_every == 0 or iteration == cfg.iterations:
             net.eval()
             act = az_action_fn(net, simulations=cfg.eval_simulations,
@@ -754,7 +785,8 @@ def train(cfg: AZConfig) -> ActorCritic:
                          f"(w={nw},f={fpw},r={sr}"
                          f"{',' + fm if fm else ''})" if len(stages) > 1 else "")
             print(
-                f"iter {total_iter:4d}{stage_tag} | buffer {len(buffer):6d} | "
+                f"iter {total_iter:4d}{stage_tag} | buffer {len(buffer):6d}"
+                f"{wbuf_tag} | "
                 f"selfplay_win {sp_win:5.1%} | p_loss {p_loss:6.3f} | "
                 f"v_loss {v_loss:8.2f} | eval_win {win_rate:5.1%} | "
                 f"eval_reward {mean_reward:7.2f}\n"
@@ -781,7 +813,8 @@ def train(cfg: AZConfig) -> ActorCritic:
                 _save_az_checkpoint(cfg.checkpoint_path, net, optimizer,
                                     total_iter, best_score, stage_idx)
         else:
-            print(f"iter {total_iter:4d} | buffer {len(buffer):6d} | "
+            print(f"iter {total_iter:4d} | buffer {len(buffer):6d}"
+                  f"{wbuf_tag} | "
                   f"selfplay_win {sp_win:5.1%} | p_loss {p_loss:6.3f} | "
                   f"v_loss {v_loss:8.2f}", flush=True)
 

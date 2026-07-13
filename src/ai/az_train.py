@@ -80,6 +80,16 @@ def main() -> None:
                              "the policy head (p_loss rises, prior de-sharpens). "
                              "It is pure normalisation — it does NOT change the "
                              "win/clear ranking, which lives in the raw reward.")
+    parser.add_argument("--win-buffer-frac", type=float, default=0.0,
+                        help="the buffer lever: fraction of each SGD minibatch "
+                             "drawn from a persistent win-only buffer (fed by "
+                             "winning self-play AND bootstrap games), so rare "
+                             "wins are never washed out of the rolling window. "
+                             "0 = off (default). Try 0.25. Attacks the actual "
+                             "wall (the net clears ~24 flames but wins 0/12 — "
+                             "it plays well but never finishes) rather than the "
+                             "value/reward scale; combine with --bootstrap-games "
+                             "so the win buffer is seeded with MCTS wins.")
     parser.add_argument("--c-puct", type=float, default=1.5)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--hidden", type=int, default=64,
@@ -131,6 +141,7 @@ def main() -> None:
         eval_simulations=args.eval_simulations,
         bootstrap_games=args.bootstrap_games,
         bootstrap_simulations=args.bootstrap_simulations,
+        win_buffer_fraction=args.win_buffer_frac,
         c_puct=args.c_puct,
         learning_rate=args.lr,
         value_mode=args.value_target,
