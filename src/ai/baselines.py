@@ -203,7 +203,16 @@ def main() -> None:
                         help="value mode the --az net was trained with; the "
                              "eval search must match (a P(win) head searched "
                              "with shaped backup is incoherent)")
+    parser.add_argument("--reward-win", type=float, default=None,
+                        help="override constant.REWARD_WIN to match a net "
+                             "trained with `az_train --reward-win` (the search "
+                             "backup uses env rewards, so the eval must use the "
+                             "same value; the win *rate* is unaffected, but the "
+                             "search behaviour and the reward columns are not)")
     args = parser.parse_args()
+    if args.reward_win is not None:
+        from .. import constant
+        constant.REWARD_WIN = args.reward_win
     seeds = EVAL_SEEDS[:args.seeds] if args.seeds else EVAL_SEEDS
     benchmark(args.policy, seeds=seeds, mcts_sims=args.mcts_sims,
               az_path=args.az, az_sims=args.az_sims,

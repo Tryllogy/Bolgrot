@@ -55,6 +55,21 @@ def main() -> None:
                              "distinct --out/--checkpoint so a run never "
                              "clobbers az.pt; a checkpoint stores no mode, so "
                              "--resume it with the same --value-target.")
+    parser.add_argument("--reward-win", type=float, default=None,
+                        help="override constant.REWARD_WIN for this run (a "
+                             "FULL retrain — use a distinct --out/--checkpoint, "
+                             "and benchmark with the same value on "
+                             "`baselines --reward-win`). Raising it (e.g. 800) "
+                             "lifts a win's *discounted* return-to-go clear of "
+                             "the near-win band that shaped's value target "
+                             "cannot separate (the +100 win, discounted over "
+                             "~60 plies, is only ~+55 in an early state and is "
+                             "swamped by clear-count noise). It is the "
+                             "reward-side version of the ranking fix, and "
+                             "asymmetric (REWARD_DEATH untouched), so unlike "
+                             "'blend' it does not poison the value near a "
+                             "death. Do NOT also raise REWARD_CLEAR_FLAME: it "
+                             "widens the very near-win band this fights.")
     parser.add_argument("--c-puct", type=float, default=1.5)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--hidden", type=int, default=64,
@@ -77,6 +92,14 @@ def main() -> None:
                              "a stage when eval win rate hits --promote-win")
     parser.add_argument("--promote-win", type=float, default=0.6)
     args = parser.parse_args()
+
+    # Reward-shaping override. game.step reads constant.REWARD_WIN dynamically,
+    # so setting it here (before any Game is built) applies to self-play, the
+    # MCTS bootstrap and evaluation alike. A distinct value = a distinct reward
+    # scale = a full retrain; never point --out/--checkpoint at az.pt.
+    if args.reward_win is not None:
+        from .. import constant
+        constant.REWARD_WIN = args.reward_win
 
     if args.resume is None:
         resume_from = ""
@@ -106,9 +129,11 @@ def main() -> None:
         promote_win_rate=args.promote_win,
     )
     mode = f"resuming from {resume_from}" if resume_from else "fresh run"
+    rwin = "" if args.reward_win is None else f", REWARD_WIN={args.reward_win}"
     print(f"Training AlphaZero ({mode}): {cfg.iterations} iters, "
           f"{cfg.games_per_iter} games/iter x {cfg.simulations} sims/move, "
-          f"value-target={cfg.value_mode}, device={cfg.device}", flush=True)
+          f"value-target={cfg.value_mode}{rwin}, device={cfg.device}",
+          flush=True)
     train(cfg)
     print(f"Done. Best policy: {args.out} | checkpoint: {args.checkpoint}")
 
