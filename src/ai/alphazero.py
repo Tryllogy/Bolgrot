@@ -582,11 +582,26 @@ class AZConfig:
     promote_win_rate: float = 0.6
 
 
+def _winbuf_path(checkpoint_path: str) -> str:
+    """Sidecar path for the persistent win buffer beside a checkpoint."""
+    return checkpoint_path + ".winbuf"
+
+
 def _save_az_checkpoint(path: str, net: ActorCritic,
                         optimizer: optim.Optimizer,
                         iteration: int, best_score: float,
-                        stage_idx: int) -> None:
-    """Resumable AZ training state (weights + optimizer + progress)."""
+                        stage_idx: int,
+                        win_buffer: "deque | None" = None) -> None:
+    """Resumable AZ training state (weights + optimizer + progress).
+
+    When ``win_buffer`` is given (the buffer lever is on), its samples are
+    persisted to a ``<path>.winbuf`` sidecar so a ``--resume`` carries the
+    hard-won winning trajectories forward instead of rebuilding them from
+    scratch each session. The samples store only ``(obs, mask, visit-π,
+    return-to-go)`` — none depend on the net's weights, so a carried win stays
+    valid training data (its value/policy targets don't go stale; only the
+    state distribution is off-policy, as in any replay buffer).
+    """
     torch.save(
         {
             "state_dict": net.state_dict(),
@@ -601,6 +616,22 @@ def _save_az_checkpoint(path: str, net: ActorCritic,
         },
         path,
     )
+    if win_buffer:
+        torch.save(list(win_buffer), _winbuf_path(path))
+
+
+def _load_win_buffer(checkpoint_path: str, win_buffer: "deque") -> int:
+    """Restore a persisted win buffer (if any) into ``win_buffer``.
+
+    Loaded with ``weights_only=False`` because the sidecar holds pickled
+    ``_Sample`` objects, not tensors (it is our own file). Returns the number of
+    samples added (0 if no sidecar exists)."""
+    path = _winbuf_path(checkpoint_path)
+    if not os.path.exists(path):
+        return 0
+    samples = torch.load(path, weights_only=False)
+    win_buffer.extend(samples)
+    return len(samples)
 
 
 def _update(net: ActorCritic, optimizer: optim.Optimizer,
@@ -715,6 +746,14 @@ def train(cfg: AZConfig) -> ActorCritic:
     # fraction is 0. Fed by winning self-play AND bootstrap games below.
     win_buffer: deque = deque(maxlen=cfg.win_buffer_size)
     use_win_buffer = cfg.win_buffer_fraction > 0.0
+    # Carry a persisted win buffer across --resume: without this the "persistent"
+    # win buffer is only persistent *within* a session and each resume re-warms
+    # from an empty buffer (rebuilding ~30 iters of accumulated wins).
+    if cfg.resume_from and use_win_buffer:
+        restored = _load_win_buffer(cfg.resume_from, win_buffer)
+        if restored:
+            print(f"Restored win buffer: {restored} samples from "
+                  f"{_winbuf_path(cfg.resume_from)}", flush=True)
 
     def bootstrap(idx: int) -> None:
         """Seed the buffer with MCTS games at stage ``idx``.
@@ -811,7 +850,8 @@ def train(cfg: AZConfig) -> ActorCritic:
                 bootstrap(stage_idx)
             if cfg.checkpoint_path:
                 _save_az_checkpoint(cfg.checkpoint_path, net, optimizer,
-                                    total_iter, best_score, stage_idx)
+                                    total_iter, best_score, stage_idx,
+                                    win_buffer if use_win_buffer else None)
         else:
             print(f"iter {total_iter:4d} | buffer {len(buffer):6d}"
                   f"{wbuf_tag} | "
@@ -823,7 +863,7 @@ def train(cfg: AZConfig) -> ActorCritic:
     if cfg.checkpoint_path:
         _save_az_checkpoint(cfg.checkpoint_path, net, optimizer,
                             iter_offset + cfg.iterations, best_score,
-                            stage_idx)
+                            stage_idx, win_buffer if use_win_buffer else None)
     return net
 
 

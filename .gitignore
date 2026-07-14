@@ -5,5 +5,6 @@ __pycache__
 src/ai/ppo.pt
 src/ai/ppo_ckpt.pt
 src/ai/az*.pt
+src/ai/*.winbuf
 # Session scratchpad snapshots (analysis logs, diagnostic scripts, model backups)
 tmp/
