@@ -759,6 +759,7 @@ def train(cfg: AZConfig) -> ActorCritic:
     # Carry a persisted win buffer across --resume: without this the "persistent"
     # win buffer is only persistent *within* a session and each resume re-warms
     # from an empty buffer (rebuilding ~30 iters of accumulated wins).
+    restored = 0
     if cfg.resume_from and use_win_buffer:
         restored = _load_win_buffer(cfg.resume_from, win_buffer)
         if restored:
@@ -810,7 +811,18 @@ def train(cfg: AZConfig) -> ActorCritic:
               f"{cfg.bootstrap_simulations} sims (stage {idx}): "
               f"{wins} won, buffer now {len(buffer)} samples", flush=True)
 
-    bootstrap(stage_idx)
+    # The startup bootstrap re-seeds the buffer with fresh MCTS wins — but on a
+    # --resume that already carried a non-empty win buffer, those winning lines
+    # are the *same* ones (MCTS targets don't go stale) and re-running the
+    # (multi-seed, ~1h at stage 8) bootstrap just recomputes what we restored.
+    # Skip it in that case; promotion bootstraps below still run (a new stage
+    # genuinely needs fresh lines). Cold runs and non-carry resumes bootstrap as
+    # before.
+    if restored:
+        print(f"Skipping startup bootstrap: win buffer carried "
+              f"({restored} samples already seeded)", flush=True)
+    else:
+        bootstrap(stage_idx)
 
     for iteration in range(1, cfg.iterations + 1):
         total_iter = iter_offset + iteration
