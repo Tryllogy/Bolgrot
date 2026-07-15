@@ -40,6 +40,12 @@ def main() -> None:
                              "imitate; self-play never wins the full game)")
     parser.add_argument("--bootstrap-simulations", type=int, default=300,
                         help="MCTS sims/move for the bootstrap games")
+    parser.add_argument("--bootstrap-win-retries", type=int, default=0,
+                        help="multi-seed teacher: extra fresh MCTS game seeds "
+                             "per bootstrap slot to obtain a win (single-seed "
+                             "MCTS wins only the ~half of seeds its RNG favours; "
+                             "re-rolling until a win seeds the buffer with "
+                             "winning lines across the pattern space). 0 = off")
     parser.add_argument("--value-target",
                         choices=("shaped", "winloss", "blend", "twohead"),
                         default="shaped",
@@ -141,6 +147,7 @@ def main() -> None:
         eval_simulations=args.eval_simulations,
         bootstrap_games=args.bootstrap_games,
         bootstrap_simulations=args.bootstrap_simulations,
+        bootstrap_win_retries=args.bootstrap_win_retries,
         win_buffer_fraction=args.win_buffer_frac,
         c_puct=args.c_puct,
         learning_rate=args.lr,

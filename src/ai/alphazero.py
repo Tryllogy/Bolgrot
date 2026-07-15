@@ -548,6 +548,16 @@ class AZConfig:
     simulations: int = 80           # PUCT sims per move during self-play
     bootstrap_games: int = 0        # MCTS games seeded into the buffer, once
     bootstrap_simulations: int = 300  # MCTS sims/move for those games
+    # Multi-seed MCTS teacher. Single-seed MCTS wins ~50% of full games, but
+    # *which* 3/6 it wins is set by the rollout RNG — no seed is unwinnable, a
+    # different seed wins a different one (measured: aggregating configs, every
+    # eval seed is won by some run). So a plain bootstrap only seeds the buffer
+    # with the ~half of games MCTS happens to win. With retries > 0, each
+    # bootstrap slot re-rolls a fresh game seed until MCTS *wins* (cap 1+retries
+    # attempts), keeping only the winning line — converting "unlucky loss" seeds
+    # into winning trajectories so the win buffer covers the pattern space, not
+    # just the lucky half. 0 = off (byte-for-byte the old single-attempt path).
+    bootstrap_win_retries: int = 0  # extra MCTS seeds per slot to obtain a win
     eval_simulations: int = 120     # PUCT sims per move at evaluation
     c_puct: float = 1.5
     gamma: float = 0.99
@@ -767,19 +777,36 @@ def train(cfg: AZConfig) -> ActorCritic:
         if not cfg.bootstrap_games:
             return
         nw, fpw, sr, fm = (tuple(stages[idx]) + (None,))[:4]
+        max_tries = 1 + max(0, cfg.bootstrap_win_retries)
         wins = 0
+        attempts = 0
         for _ in range(cfg.bootstrap_games):
-            samples, won = mcts_bootstrap_game(
-                seed=rng.randrange(1 << 30),
-                simulations=cfg.bootstrap_simulations, gamma=cfg.gamma,
-                rng=rng, num_actions=num_actions,
-                num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
-                spawn_formation=fm, value_mode=cfg.value_mode)
-            buffer.extend(samples)
-            if use_win_buffer and won:
-                win_buffer.extend(samples)
-            wins += int(won)
-        print(f"Bootstrapped {cfg.bootstrap_games} MCTS games at "
+            # Multi-seed: re-roll fresh game seeds until MCTS wins (or the retry
+            # budget is spent). Keep only the winning line; on exhaustion fall
+            # back to the last attempt so the rolling buffer still gets data.
+            last_samples: list[_Sample] | None = None
+            won = False
+            for _try in range(max_tries):
+                samples, won = mcts_bootstrap_game(
+                    seed=rng.randrange(1 << 30),
+                    simulations=cfg.bootstrap_simulations, gamma=cfg.gamma,
+                    rng=rng, num_actions=num_actions,
+                    num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
+                    spawn_formation=fm, value_mode=cfg.value_mode)
+                attempts += 1
+                last_samples = samples
+                if won:
+                    break
+            if won:
+                buffer.extend(last_samples)
+                if use_win_buffer:
+                    win_buffer.extend(last_samples)
+                wins += 1
+            elif last_samples is not None:
+                buffer.extend(last_samples)
+        tag = (f" (multi-seed <={cfg.bootstrap_win_retries} retries, "
+               f"{attempts} games)" if cfg.bootstrap_win_retries else "")
+        print(f"Bootstrapped {cfg.bootstrap_games} MCTS slots{tag} at "
               f"{cfg.bootstrap_simulations} sims (stage {idx}): "
               f"{wins} won, buffer now {len(buffer)} samples", flush=True)
 
