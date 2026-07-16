@@ -190,8 +190,17 @@ def main() -> None:
                         help="add an MCTS row with this per-move sim budget "
                              "(slow; use --seeds to shrink the seed set)")
     parser.add_argument("--seeds", type=int, default=None,
-                        help="score on the first N EVAL_SEEDS only "
-                             "(default: all)")
+                        help="score on N EVAL_SEEDS only (default: all), "
+                             "starting at --seed-offset")
+    parser.add_argument("--seed-offset", type=int, default=0,
+                        help="start the --seeds window at this index. The "
+                             "training gate selects the saved net on "
+                             "EVAL_SEEDS[:16], which *contains* the default "
+                             "--seeds 6 window, so benchmarking a gate-picked "
+                             "net there scores it on the seeds it was chosen "
+                             "on (measured inflation: 83%% vs 37.5%% for one "
+                             "net). Use --seed-offset 16 for seeds no gate "
+                             "ever saw.")
     parser.add_argument("--az", default=None,
                         help="add an AlphaZero row from this policy "
                              "checkpoint (net-guided PUCT; slow, use --seeds)")
@@ -220,7 +229,9 @@ def main() -> None:
     if args.value_scale is not None:
         from . import alphazero
         alphazero.VALUE_SCALE = args.value_scale
-    seeds = EVAL_SEEDS[:args.seeds] if args.seeds else EVAL_SEEDS
+    start = args.seed_offset
+    seeds = (EVAL_SEEDS[start:start + args.seeds] if args.seeds
+             else EVAL_SEEDS[start:])
     benchmark(args.policy, seeds=seeds, mcts_sims=args.mcts_sims,
               az_path=args.az, az_sims=args.az_sims,
               az_value_mode=args.az_value_mode)
