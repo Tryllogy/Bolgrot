@@ -201,6 +201,21 @@ So the *facts* hold but the *conclusion* does not. Visit counts are the robust s
 - **The zugzwang is transient and routine, not a trap that closes.** In lost seed 1724, `clear_safe == 0` occurs at plies **10, 13, 42, 45, 46 and 50**. The agent handles it correctly five times (retreat/stall/`MoveFlames`, and progress reopens next ply) and dies on the sixth. Across all 8 held-out seeds, losses keep a safe clearing move until **1 ply before death** — so no version of "it was doomed 20 plies ago and wandering" survives.
 - **Removing the fatal move changes nothing.** A root 1-ply survival filter (`tmp/bench_safe.py` — never play a root action that dies when another survives; the selection rule untouched) *does* fix all three measured fatal moves, and scores **5/8 — identical to the shipped 5/8**, with `terminal` identical to the cent (+58.75), i.e. **the same games won and lost**. It survives 2 plies longer (59.6 vs 57.8) and clears slightly more (320 vs 317.5), then loses the same seeds. The agent does not lose *because* it plays the fatal move; it plays the fatal move *because* it has already lost (its own Q agrees — at the fatal state every option is ≈ -9).
 
+**h128 + win-buffer + multi-seed teacher — best training signal of the project, inconclusive benchmark (2026-07-17).** The h128 verdict above ("capacity is NOT the plateau") was reached *before* the buffer lever (07-14) and the multi-seed teacher (07-16) existed, and it rests on 6-seed gate-picked numbers the reference box below shows are unreadable. It also left a real gap: the July h128 was the **only** net whose self-play won the full game natively (12.5-50% vs the 64-net's chronic 0%) — exactly the rare material the win buffer exists to retain — and the two were never combined. Cold run, `--hidden 128 --win-buffer-frac 0.25 --simulations 300 --bootstrap-games 8 --bootstrap-win-retries 4 --iterations 100` (`src/ai/az_h128b.pt`):
+
+*The training signal is the best ever measured here*, and it reproduces July's capacity effect independently: ramp to stage 8 in **40 iters** (vs ~77 for the 64-net), the 2-flame wall in **5** (vs 30), the `line` stage at **100% on the first eval** (the 64-net never promoted it in 65 iters pre-`VALUE_SCALE`), full-game `selfplay_win` **recurring at 12-25%** (vs the 64-net's chronic 0%), and `wbuf` accumulating monotonically 4235 → 7082. The synergy does mechanically what it promised: **capacity generates the wins, the buffer keeps them.**
+
+*The benchmark does not follow* — 32 held-out seeds, 300 sims:
+
+| net | iters | win% | wins | return | clear | terminal |
+|---|---|---|---|---|---|---|
+| **az.pt (64)** | **300+** | **50.0** | **16/32** | 367.14 | 316.56 | +44.69 |
+| mcts@300 | — | 43.75 | 14/32 | 356.63 | 306.25 | +37.50 |
+| h128b final | **100** | 34.4 | 11/32 | 320.62 | 287.50 | +26.25 |
+| h128b gate (iter 95) | 95 | 28.1 | 9/32 | 299.38 | 275.31 | +19.69 |
+
+**Read this as inconclusive, not negative**: it compares a **100-iteration** net to a **300+-iteration** one, and their `p_loss` says exactly that — 2.198 vs 1.65, i.e. 21% vs 42% of the way down from a uniform policy (`ln(17) = 2.833`; note 2.198 < 2.833, so the h128 policy *has* learned — it is under-developed, not dead). The honest test of the synergy is a `--resume` to ~300 iterations; the checkpoint and its `.winbuf` are saved (`tmp/az_h128b_ckpt_iter100.pt(.winbuf)`), so it restarts warm and skips the bootstrap. **Also: the gate again picked a *worse* net than the final** (9/32 vs 11/32) — second time in two days, and expected: it selects on `eval_win@120`, which the reference box shows is noise-dominated, so it reliably banks lucky snapshots. Snapshots: `tmp/az_h128b_final_iter100.pt` (11/32), `tmp/az_h128b_gate_iter100.pt` (9/32).
+
 **THE REFERENCE NUMBER — `az.pt` is a 50% agent, and 8 seeds overstated it by 12 points (2026-07-16).** Everything above is measured on 6-8 seeds. Re-measured on **32 held-out seeds** (`baselines --az src/ai/az.pt --az-sims 300 --mcts-sims 300 --seeds 32 --seed-offset 16` — indices 16-47, none ever seen by the gate; the seed window can now run past `EVAL_SEEDS`'s 32 entries via `policy.eval_seed(i)`):
 
 | policy | win% | wins | return | clear | terminal |
