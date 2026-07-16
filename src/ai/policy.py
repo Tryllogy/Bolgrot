@@ -26,7 +26,20 @@ ActionFn = Callable[[Game], int]
 # runs while still covering many flame layouts. 32 seeds keep the win-rate
 # quantisation fine (~3% steps) so curriculum promotion isn't decided by a
 # handful of lucky layouts.
-EVAL_SEEDS: list[int] = [101 * i + 7 for i in range(32)]
+def eval_seed(i: int) -> int:
+    """The i-th evaluation seed.
+
+    Exposed as a generator, not just a list, so a benchmark can index *past*
+    :data:`EVAL_SEEDS` for a large held-out set. The training gate selects on
+    ``EVAL_SEEDS[:16]``, so only indices >= 16 are unselected — and there are
+    just 16 of those in the list itself, too few to resolve the differences
+    that matter here (measured 2026-07-16: 4/8 vs 6/8 on the same net is noise).
+    ``eval_seed(16..47)`` gives 32 seeds no gate has ever seen.
+    """
+    return 101 * i + 7
+
+
+EVAL_SEEDS: list[int] = [eval_seed(i) for i in range(32)]
 
 # Safety cap so a policy that never makes progress can't loop forever. HP/PA
 # are finite so episodes terminate on their own; this only guards regressions.

@@ -27,6 +27,7 @@ from ..game import Game, REWARD_PARTS
 from .policy import (
     ActionFn,
     EVAL_SEEDS,
+    eval_seed,
     net_action_fn,
     run_episode_decomposed,
 )
@@ -200,7 +201,13 @@ def main() -> None:
                              "net there scores it on the seeds it was chosen "
                              "on (measured inflation: 83%% vs 37.5%% for one "
                              "net). Use --seed-offset 16 for seeds no gate "
-                             "ever saw.")
+                             "ever saw; the window may run past EVAL_SEEDS's "
+                             "32 entries (seeds are generated, not listed), so "
+                             "`--seeds 32 --seed-offset 16` is a 32-seed "
+                             "held-out set. Prefer that to `--seeds 8`: at 8 "
+                             "seeds a 2-win gap is indistinguishable from "
+                             "noise (measured 2026-07-16), which makes small "
+                             "real effects unreadable.")
     parser.add_argument("--az", default=None,
                         help="add an AlphaZero row from this policy "
                              "checkpoint (net-guided PUCT; slow, use --seeds)")
@@ -230,8 +237,8 @@ def main() -> None:
         from . import alphazero
         alphazero.VALUE_SCALE = args.value_scale
     start = args.seed_offset
-    seeds = (EVAL_SEEDS[start:start + args.seeds] if args.seeds
-             else EVAL_SEEDS[start:])
+    seeds = ([eval_seed(i) for i in range(start, start + args.seeds)]
+             if args.seeds else EVAL_SEEDS[start:])
     benchmark(args.policy, seeds=seeds, mcts_sims=args.mcts_sims,
               az_path=args.az, az_sims=args.az_sims,
               az_value_mode=args.az_value_mode)
