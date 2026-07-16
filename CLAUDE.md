@@ -201,6 +201,16 @@ So the *facts* hold but the *conclusion* does not. Visit counts are the robust s
 - **The zugzwang is transient and routine, not a trap that closes.** In lost seed 1724, `clear_safe == 0` occurs at plies **10, 13, 42, 45, 46 and 50**. The agent handles it correctly five times (retreat/stall/`MoveFlames`, and progress reopens next ply) and dies on the sixth. Across all 8 held-out seeds, losses keep a safe clearing move until **1 ply before death** — so no version of "it was doomed 20 plies ago and wandering" survives.
 - **Removing the fatal move changes nothing.** A root 1-ply survival filter (`tmp/bench_safe.py` — never play a root action that dies when another survives; the selection rule untouched) *does* fix all three measured fatal moves, and scores **5/8 — identical to the shipped 5/8**, with `terminal` identical to the cent (+58.75), i.e. **the same games won and lost**. It survives 2 plies longer (59.6 vs 57.8) and clears slightly more (320 vs 317.5), then loses the same seeds. The agent does not lose *because* it plays the fatal move; it plays the fatal move *because* it has already lost (its own Q agrees — at the fatal state every option is ≈ -9).
 
+**THE REFERENCE NUMBER — `az.pt` is a 50% agent, and 8 seeds overstated it by 12 points (2026-07-16).** Everything above is measured on 6-8 seeds. Re-measured on **32 held-out seeds** (`baselines --az src/ai/az.pt --az-sims 300 --mcts-sims 300 --seeds 32 --seed-offset 16` — indices 16-47, none ever seen by the gate; the seed window can now run past `EVAL_SEEDS`'s 32 entries via `policy.eval_seed(i)`):
+
+| policy | win% | wins | return | clear | terminal |
+|---|---|---|---|---|---|
+| **az.pt@300** | **50.0** | **16/32** | 367.14 | 316.56 | +44.69 |
+| **mcts@300** | **43.75** | **14/32** | 356.63 | 306.25 | +37.50 |
+| greedy / trained (PPO) / random | 0.0 | 0/32 | — | — | — |
+
+The 8-seed subset read `az.pt` at 5/8 = **62.5%** and MCTS at 4/8 = 50%; on 32 seeds they are **50.0%** and **43.75%**. Those 8 seeds were simply a favourable draw — the noise problem, now quantified. **Use 16/32 as the baseline any new agent must beat, and quote no win rate measured on fewer than ~32 seeds.** Resolution: one win = 3.1 points; the binomial sd at n=32, p=0.5 is ~2.8 wins, so **a new net needs roughly 22/32 before "it beats `az.pt`" is more than noise** — and AZ-vs-MCTS (16 vs 14, two wins) remains *within* noise even here, so "AZ ties MCTS" still stands, now on 64 games.
+
 **THE REFRAMING: every seed is winnable, and the ceiling is *reliability*, not strength (2026-07-16).** The one question six levers never asked — *can the lost games be won at all?* — has a decisive answer. `tmp/winnable.py` replays the seeds `az.pt`@300 loses, at higher AZ budget and across MCTS rollout RNGs (a control seed known to be won guards against a harness fault; AZ's own `seed` is **not** a probe — its eval search is deterministic, the rng feeds only the Dirichlet noise eval disables). Per-seed results on the 8 held-out seeds:
 
 | seed | az@300 | az@1000 | mcts@300/rng0 |
