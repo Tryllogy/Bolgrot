@@ -537,6 +537,83 @@ def mcts_bootstrap_game(seed: int, simulations: int, gamma: float,
     return samples, game.won
 
 
+# --- Parallel game workers ---------------------------------------------------
+# Self-play games, MCTS bootstrap slots and gate-eval games are all independent
+# given a fixed net snapshot, and one such game saturates exactly one core (the
+# bottleneck is the Python search loop; torch gains nothing from threads on an
+# MLP this small). A persistent spawn Pool runs one game per core. The net
+# travels by file (saved once per iteration, ~100 KB) because a spawn worker
+# shares no memory; workers cache it keyed by (path, version). Module-global
+# overrides (VALUE_SCALE, constant.REWARD_WIN — mutated by az_train flags in
+# the parent) do not survive spawn either, so they are re-applied per worker in
+# the initializer. Everything below must stay module-level picklable.
+
+_WORKER_NET: dict = {}
+
+
+def _worker_init(value_scale: float, reward_win: float) -> None:
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    torch.set_num_threads(1)
+    global VALUE_SCALE
+    VALUE_SCALE = value_scale
+    constant.REWARD_WIN = reward_win
+
+
+def _worker_load_net(path: str, version: int) -> ActorCritic:
+    if _WORKER_NET.get("key") != (path, version):
+        from .policy import load_policy
+        _WORKER_NET["net"] = load_policy(path)
+        _WORKER_NET["key"] = (path, version)
+    return _WORKER_NET["net"]
+
+
+def _selfplay_task(args: tuple) -> tuple[list[_Sample], bool]:
+    (net_path, version, seed, sims, c_puct, gamma, num_actions, stage,
+     dirichlet_alpha, temp_moves, value_mode) = args
+    net = _worker_load_net(net_path, version)
+    nw, fpw, sr, fm = stage
+    return self_play_game(
+        net, seed=seed, simulations=sims, c_puct=c_puct, gamma=gamma,
+        rng=random.Random(seed), num_actions=num_actions,
+        num_waves=nw, flames_per_wave=fpw, spawn_radius=sr, spawn_formation=fm,
+        dirichlet_alpha=dirichlet_alpha, temp_moves=temp_moves,
+        value_mode=value_mode)
+
+
+def _bootstrap_task(args: tuple) -> tuple[list[_Sample], bool, int]:
+    """One multi-seed bootstrap slot: re-roll seeds until MCTS wins (cap
+    1+retries), return ``(samples_of_last_attempt, won, attempts)``."""
+    slot_seed, retries, sims, gamma, num_actions, stage, value_mode = args
+    rng = random.Random(slot_seed)
+    nw, fpw, sr, fm = stage
+    samples: list[_Sample] = []
+    won = False
+    attempts = 0
+    for _ in range(1 + max(0, retries)):
+        samples, won = mcts_bootstrap_game(
+            seed=rng.randrange(1 << 30), simulations=sims, gamma=gamma,
+            rng=rng, num_actions=num_actions,
+            num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
+            spawn_formation=fm, value_mode=value_mode)
+        attempts += 1
+        if won:
+            break
+    return samples, won, attempts
+
+
+def _eval_task(args: tuple) -> tuple[float, bool, dict]:
+    (net_path, version, seed, sims, c_puct, gamma, value_mode, stage) = args
+    from .policy import run_episode_decomposed
+    net = _worker_load_net(net_path, version)
+    act = az_action_fn(net, simulations=sims, c_puct=c_puct, gamma=gamma,
+                       value_mode=value_mode)
+    nw, fpw, sr, fm = stage
+    total, won, _steps, parts = run_episode_decomposed(
+        act, seed, num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
+        spawn_formation=fm)
+    return total, won, parts
+
+
 # --- Trainer ----------------------------------------------------------------
 
 @dataclass
@@ -558,7 +635,23 @@ class AZConfig:
     # into winning trajectories so the win buffer covers the pattern space, not
     # just the lucky half. 0 = off (byte-for-byte the old single-attempt path).
     bootstrap_win_retries: int = 0  # extra MCTS seeds per slot to obtain a win
-    eval_simulations: int = 120     # PUCT sims per move at evaluation
+    # Gate-eval search budget. None = evaluate at `simulations`, i.e. the budget
+    # the net actually plays and is benchmarked at. The old fixed 120 was the
+    # gate's central defect: the metric both *understates* the net (line stage:
+    # 2/16 at 120 vs 16/16 at 300 for the same net) and is noise-dominated
+    # (0% -> 50% -> 6% across consecutive evals), so over ~20 evals the gate
+    # reliably banked a lucky immature snapshot over the mature final (measured
+    # three times: iter-95 9/32 vs final 11/32; iter-240 3/8 held-out sold as
+    # 83%; iter-145 banked over iter-300). Evaluating at the real budget was
+    # always the fix — it just cost too much serially; with `workers` the
+    # parallel eval makes it affordable.
+    eval_simulations: int | None = None
+    # Game-level parallelism. Self-play games, bootstrap slots and eval games
+    # are independent given the net snapshot, and the whole trainer is otherwise
+    # single-core. 0 = auto (cpu_count - 1), 1 = serial (the historical path,
+    # byte-for-byte). Parallel runs draw one RNG seed per game from the trainer
+    # RNG, so they are seeded/reproducible but not stream-identical to serial.
+    workers: int = 0
     c_puct: float = 1.5
     gamma: float = 0.99
     dirichlet_alpha: float = 0.3    # root exploration noise
@@ -601,7 +694,8 @@ def _save_az_checkpoint(path: str, net: ActorCritic,
                         optimizer: optim.Optimizer,
                         iteration: int, best_score: float,
                         stage_idx: int,
-                        win_buffer: "deque | None" = None) -> None:
+                        win_buffer: "deque | None" = None,
+                        best_iteration: int = -1) -> None:
     """Resumable AZ training state (weights + optimizer + progress).
 
     When ``win_buffer`` is given (the buffer lever is on), its samples are
@@ -622,6 +716,11 @@ def _save_az_checkpoint(path: str, net: ActorCritic,
             "optimizer": optimizer.state_dict(),
             "iteration": iteration,
             "best_score": best_score,
+            # Iteration of the snapshot the gate saved to out_path — WITHOUT
+            # this, the only clue is decoding best_score, and a gate snapshot
+            # got mislabeled with the final iteration once already (iter-145
+            # named iter300, 2026-07-17).
+            "best_iteration": best_iteration,
             "stage_idx": stage_idx,
         },
         path,
@@ -728,6 +827,7 @@ def train(cfg: AZConfig) -> ActorCritic:
 
     iter_offset = 0
     best_score = float("-inf")
+    best_iter = -1
     stage_idx = 0
     if cfg.resume_from:
         if not os.path.exists(cfg.resume_from):
@@ -744,9 +844,11 @@ def train(cfg: AZConfig) -> ActorCritic:
             optimizer.load_state_dict(ckpt["optimizer"])
         iter_offset = ckpt.get("iteration", 0)
         best_score = ckpt.get("best_score", float("-inf"))
+        best_iter = ckpt.get("best_iteration", -1)
         stage_idx = ckpt.get("stage_idx", 0)
         print(f"Resumed from {cfg.resume_from}: iter {iter_offset}, "
-              f"best {best_score:.2f}, stage {stage_idx}", flush=True)
+              f"best {best_score:.2f} (iter {best_iter}), stage {stage_idx}",
+              flush=True)
 
     stages: list[tuple[int | None, int | None, int | None]] = (
         list(cfg.curriculum) if cfg.curriculum else [(None, None, None)])
@@ -766,6 +868,31 @@ def train(cfg: AZConfig) -> ActorCritic:
             print(f"Restored win buffer: {restored} samples from "
                   f"{_winbuf_path(cfg.resume_from)}", flush=True)
 
+    # --- Worker pool (one game per core; see the worker section above) ----
+    # Pool workers are daemonic, so a crashed/interrupted parent takes them
+    # down with it; the normal path closes the pool before returning.
+    workers = cfg.workers if cfg.workers else max(1, (os.cpu_count() or 2) - 1)
+    pool = None
+    net_file = ""
+    net_version = 0
+    if workers > 1:
+        import multiprocessing as mp
+        import tempfile
+        fd, net_file = tempfile.mkstemp(prefix="az_worker_net_", suffix=".pt")
+        os.close(fd)
+        pool = mp.get_context("spawn").Pool(
+            workers, initializer=_worker_init,
+            initargs=(VALUE_SCALE, constant.REWARD_WIN))
+        print(f"Worker pool: {workers} processes (one game per core)",
+              flush=True)
+
+    def ship_net() -> int:
+        """Publish current weights for the workers; returns the version tag."""
+        nonlocal net_version
+        net_version += 1
+        save_policy(net, net_file)
+        return net_version
+
     def bootstrap(idx: int) -> None:
         """Seed the buffer with MCTS games at stage ``idx``.
 
@@ -781,30 +908,47 @@ def train(cfg: AZConfig) -> ActorCritic:
         max_tries = 1 + max(0, cfg.bootstrap_win_retries)
         wins = 0
         attempts = 0
-        for _ in range(cfg.bootstrap_games):
-            # Multi-seed: re-roll fresh game seeds until MCTS wins (or the retry
-            # budget is spent). Keep only the winning line; on exhaustion fall
-            # back to the last attempt so the rolling buffer still gets data.
-            last_samples: list[_Sample] | None = None
-            won = False
-            for _try in range(max_tries):
-                samples, won = mcts_bootstrap_game(
-                    seed=rng.randrange(1 << 30),
-                    simulations=cfg.bootstrap_simulations, gamma=cfg.gamma,
-                    rng=rng, num_actions=num_actions,
-                    num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
-                    spawn_formation=fm, value_mode=cfg.value_mode)
-                attempts += 1
-                last_samples = samples
+        if pool is not None:
+            # One slot per worker; the seed re-roll loop runs inside the task.
+            tasks = [(rng.randrange(1 << 30), cfg.bootstrap_win_retries,
+                      cfg.bootstrap_simulations, cfg.gamma, num_actions,
+                      (nw, fpw, sr, fm), cfg.value_mode)
+                     for _ in range(cfg.bootstrap_games)]
+            for samples, won, n_attempts in pool.map(_bootstrap_task, tasks):
+                attempts += n_attempts
                 if won:
-                    break
-            if won:
-                buffer.extend(last_samples)
-                if use_win_buffer:
-                    win_buffer.extend(last_samples)
-                wins += 1
-            elif last_samples is not None:
-                buffer.extend(last_samples)
+                    buffer.extend(samples)
+                    if use_win_buffer:
+                        win_buffer.extend(samples)
+                    wins += 1
+                elif samples:
+                    buffer.extend(samples)
+        else:
+            for _ in range(cfg.bootstrap_games):
+                # Multi-seed: re-roll fresh game seeds until MCTS wins (or the
+                # retry budget is spent). Keep only the winning line; on
+                # exhaustion fall back to the last attempt so the rolling
+                # buffer still gets data.
+                last_samples: list[_Sample] | None = None
+                won = False
+                for _try in range(max_tries):
+                    samples, won = mcts_bootstrap_game(
+                        seed=rng.randrange(1 << 30),
+                        simulations=cfg.bootstrap_simulations, gamma=cfg.gamma,
+                        rng=rng, num_actions=num_actions,
+                        num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
+                        spawn_formation=fm, value_mode=cfg.value_mode)
+                    attempts += 1
+                    last_samples = samples
+                    if won:
+                        break
+                if won:
+                    buffer.extend(last_samples)
+                    if use_win_buffer:
+                        win_buffer.extend(last_samples)
+                    wins += 1
+                elif last_samples is not None:
+                    buffer.extend(last_samples)
         tag = (f" (multi-seed <={cfg.bootstrap_win_retries} retries, "
                f"{attempts} games)" if cfg.bootstrap_win_retries else "")
         print(f"Bootstrapped {cfg.bootstrap_games} MCTS slots{tag} at "
@@ -831,19 +975,33 @@ def train(cfg: AZConfig) -> ActorCritic:
 
         # --- Self-play -------------------------------------------------
         wins = 0
-        for g in range(cfg.games_per_iter):
-            samples, won = self_play_game(
-                net, seed=rng.randrange(1 << 30),
-                simulations=cfg.simulations, c_puct=cfg.c_puct,
-                gamma=cfg.gamma, rng=rng, num_actions=num_actions,
-                num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
-                spawn_formation=fm,
-                dirichlet_alpha=cfg.dirichlet_alpha, temp_moves=cfg.temp_moves,
-                value_mode=cfg.value_mode)
-            buffer.extend(samples)
-            if use_win_buffer and won:
-                win_buffer.extend(samples)
-            wins += int(won)
+        if pool is not None:
+            version = ship_net()
+            tasks = [(net_file, version, rng.randrange(1 << 30),
+                      cfg.simulations, cfg.c_puct, cfg.gamma, num_actions,
+                      (nw, fpw, sr, fm), cfg.dirichlet_alpha, cfg.temp_moves,
+                      cfg.value_mode)
+                     for _ in range(cfg.games_per_iter)]
+            for samples, won in pool.map(_selfplay_task, tasks):
+                buffer.extend(samples)
+                if use_win_buffer and won:
+                    win_buffer.extend(samples)
+                wins += int(won)
+        else:
+            for g in range(cfg.games_per_iter):
+                samples, won = self_play_game(
+                    net, seed=rng.randrange(1 << 30),
+                    simulations=cfg.simulations, c_puct=cfg.c_puct,
+                    gamma=cfg.gamma, rng=rng, num_actions=num_actions,
+                    num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
+                    spawn_formation=fm,
+                    dirichlet_alpha=cfg.dirichlet_alpha,
+                    temp_moves=cfg.temp_moves,
+                    value_mode=cfg.value_mode)
+                buffer.extend(samples)
+                if use_win_buffer and won:
+                    win_buffer.extend(samples)
+                wins += int(won)
 
         # --- Update ----------------------------------------------------
         p_loss, v_loss = _update(net, optimizer, buffer, cfg, rng,
@@ -854,11 +1012,28 @@ def train(cfg: AZConfig) -> ActorCritic:
         wbuf_tag = f" | wbuf {len(win_buffer):5d}" if use_win_buffer else ""
         if iteration % cfg.eval_every == 0 or iteration == cfg.iterations:
             net.eval()
-            act = az_action_fn(net, simulations=cfg.eval_simulations,
-                               c_puct=cfg.c_puct, gamma=cfg.gamma,
-                               value_mode=cfg.value_mode)
-            mean_reward, win_rate, parts = _eval_action_fn(
-                act, cfg.eval_seeds, nw, fpw, sr, fm)
+            # Evaluate at the budget the net actually plays at (None = the
+            # self-play budget) — see the eval_simulations comment in AZConfig.
+            eval_sims = (cfg.eval_simulations if cfg.eval_simulations
+                         else cfg.simulations)
+            if pool is not None:
+                version = ship_net()
+                tasks = [(net_file, version, s, eval_sims, cfg.c_puct,
+                          cfg.gamma, cfg.value_mode, (nw, fpw, sr, fm))
+                         for s in cfg.eval_seeds]
+                results = pool.map(_eval_task, tasks)
+                from ..game import REWARD_PARTS
+                n = len(results)
+                mean_reward = sum(r[0] for r in results) / n
+                win_rate = sum(1 for r in results if r[1]) / n
+                parts = {p: sum(r[2][p] for r in results) / n
+                         for p in REWARD_PARTS}
+            else:
+                act = az_action_fn(net, simulations=eval_sims,
+                                   c_puct=cfg.c_puct, gamma=cfg.gamma,
+                                   value_mode=cfg.value_mode)
+                mean_reward, win_rate, parts = _eval_action_fn(
+                    act, cfg.eval_seeds, nw, fpw, sr, fm)
             stage_tag = (f" | stage {stage_idx}/{len(stages) - 1} "
                          f"(w={nw},f={fpw},r={sr}"
                          f"{',' + fm if fm else ''})" if len(stages) > 1 else "")
@@ -866,7 +1041,7 @@ def train(cfg: AZConfig) -> ActorCritic:
                 f"iter {total_iter:4d}{stage_tag} | buffer {len(buffer):6d}"
                 f"{wbuf_tag} | "
                 f"selfplay_win {sp_win:5.1%} | p_loss {p_loss:6.3f} | "
-                f"v_loss {v_loss:8.2f} | eval_win {win_rate:5.1%} | "
+                f"v_loss {v_loss:8.2f} | eval_win@{eval_sims} {win_rate:5.1%} | "
                 f"eval_reward {mean_reward:7.2f}\n"
                 f"           reward parts: {format_reward_parts(parts)}",
                 flush=True)
@@ -880,7 +1055,10 @@ def train(cfg: AZConfig) -> ActorCritic:
                      + mean_reward)
             if cfg.out_path and score > best_score:
                 best_score = score
+                best_iter = total_iter
                 save_policy(net, cfg.out_path)
+                print(f"           >> new best (iter {total_iter}) saved to "
+                      f"{cfg.out_path}", flush=True)
             if (win_rate >= cfg.promote_win_rate
                     and stage_idx < len(stages) - 1):
                 stage_idx += 1
@@ -890,7 +1068,8 @@ def train(cfg: AZConfig) -> ActorCritic:
             if cfg.checkpoint_path:
                 _save_az_checkpoint(cfg.checkpoint_path, net, optimizer,
                                     total_iter, best_score, stage_idx,
-                                    win_buffer if use_win_buffer else None)
+                                    win_buffer if use_win_buffer else None,
+                                    best_iteration=best_iter)
         else:
             print(f"iter {total_iter:4d} | buffer {len(buffer):6d}"
                   f"{wbuf_tag} | "
@@ -902,7 +1081,13 @@ def train(cfg: AZConfig) -> ActorCritic:
     if cfg.checkpoint_path:
         _save_az_checkpoint(cfg.checkpoint_path, net, optimizer,
                             iter_offset + cfg.iterations, best_score,
-                            stage_idx, win_buffer if use_win_buffer else None)
+                            stage_idx, win_buffer if use_win_buffer else None,
+                            best_iteration=best_iter)
+    if pool is not None:
+        pool.close()
+        pool.join()
+    if net_file and os.path.exists(net_file):
+        os.unlink(net_file)
     return net
 
 

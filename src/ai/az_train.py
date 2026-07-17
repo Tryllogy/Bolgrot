@@ -33,7 +33,17 @@ def main() -> None:
     parser.add_argument("--games-per-iter", type=int, default=8)
     parser.add_argument("--simulations", type=int, default=80,
                         help="PUCT sims per move during self-play")
-    parser.add_argument("--eval-simulations", type=int, default=120)
+    parser.add_argument("--eval-simulations", type=int, default=None,
+                        help="gate-eval sims/move. Default: same as "
+                             "--simulations, i.e. the budget the net actually "
+                             "plays at. The old fixed 120 was the gate's core "
+                             "defect — noise-dominated and understating the "
+                             "net, it banked a lucky immature snapshot over "
+                             "the mature final three runs in a row")
+    parser.add_argument("--workers", type=int, default=0,
+                        help="parallel game workers for self-play, bootstrap "
+                             "and eval (one game per core). 0 = auto "
+                             "(cpu_count - 1), 1 = serial (historical path)")
     parser.add_argument("--bootstrap-games", type=int, default=0,
                         help="seed the replay buffer with this many MCTS games "
                              "before training (gives the net winning lines to "
@@ -145,6 +155,7 @@ def main() -> None:
         games_per_iter=args.games_per_iter,
         simulations=args.simulations,
         eval_simulations=args.eval_simulations,
+        workers=args.workers,
         bootstrap_games=args.bootstrap_games,
         bootstrap_simulations=args.bootstrap_simulations,
         bootstrap_win_retries=args.bootstrap_win_retries,
