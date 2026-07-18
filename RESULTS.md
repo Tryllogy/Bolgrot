@@ -37,8 +37,18 @@ tight margin — not search depth or exploration — is the real wall.
 | MCTS @300 sims | 14/32 (43.8%) | planning search; wins, but its `safe_greedy` rollout leaf is noisy |
 | **AlphaZero `az.pt` @300** | **16/32 (50.0%)** | learned value head replaces the rollout; the reference number |
 | AlphaZero `az.pt` @1000 | 23/32 (71.9%) | AZ's *play* scales with budget where MCTS's does not |
+| AlphaZero `az.pt` @2000 | 25/32 (78.1%) | same net, more sims/move — no retrain |
+| **AlphaZero `az.pt` @4000** | **28/32 (87.5%)** | wins the chronic-loss and double-orphan seeds; still climbing |
 
-Nine levers were tried to push a single agent past this band — reward-ranking
+**The single-agent "ceiling" was largely a budget artifact.** Every ~50-72%
+figure was measured at ≤1000 sims/move; the *same* net at 4000 sims reaches
+**87.5%**, monotonically, with no retraining — and wins the hardest seeds
+(`1623`, `4148`) that no ≤1000-sim agent could. The per-doubling gain is not
+shrinking, so it may climb further. This is the autosolver/offline lever (4000
+sims ≈ 6 s/move), not the live-hint budget.
+
+Nine levers were tried to push a single agent past the ~50% band *at fixed
+(≤1000-sim) budget* — reward-ranking
 variants (winloss / blend / twohead), a larger `REWARD_WIN`, a persistent
 win-buffer (+ cross-session carry), a multi-seed MCTS teacher, double network
 width (h128), and deeper (1000-sim) self-play. **All plateau at ~50%.** Each

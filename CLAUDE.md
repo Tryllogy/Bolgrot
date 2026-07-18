@@ -287,6 +287,17 @@ So with *oracle* RNG selection the cross-window minimum is **k=2** (bounded by 4
 
 The 8-seed subset read `az.pt` at 5/8 = **62.5%** and MCTS at 4/8 = 50%; on 32 seeds they are **50.0%** and **43.75%**. Those 8 seeds were simply a favourable draw — the noise problem, now quantified. **Use 16/32 as the baseline any new agent must beat, and quote no win rate measured on fewer than ~32 seeds.** Resolution: one win = 3.1 points; the binomial sd at n=32, p=0.5 is ~2.8 wins, so **a new net needs roughly 22/32 before "it beats `az.pt`" is more than noise** — and AZ-vs-MCTS (16 vs 14, two wins) remains *within* noise even here, so "AZ ties MCTS" still stands, now on 64 games.
 
+**THE SINGLE-AGENT CEILING WAS A BUDGET ARTIFACT — `az.pt`@4000 is 87.5% (2026-07-18).** Every "~50-72% ceiling" figure above was measured at **≤1000 sims/move**. Sweeping *the same net* `az.pt` up in play-time budget (no retrain — `tmp/pbench.py --nets src/ai/az.pt --sims S --seeds 32 --seed-offset 16`) climbs **monotonically and does not plateau**:
+
+| `az.pt` @ sims | held-out 32 | notes |
+|---|---|---|
+| 300 | 16/32 (50.0%) | the reference number |
+| 1000 | 23/32 (71.9%) | +7 |
+| 2000 | 25/32 (78.1%) | +2; wins 3441 (an AZ@1000 orphan) |
+| **4000** | **28/32 (87.5%)** | +3; wins **1623** (the chronic loss) **and 4148** (the double-AZ-net orphan) |
+
+The per-doubling gain does **not** shrink (1000→2000 = +2, 2000→4000 = **+3**), so 8000 is not obviously saturated. `return`/`clear`/`terminal` all rise in step (clear 316→350, terminal +45→+86), the same monotone-in-budget signal earlier boxes measured on 8 seeds — now decisive at n=32 (28 vs 23 is ~2σ). **This substantially revises the project's central "single agent plateaus at ~50-72%" narrative: that plateau was a *budget* artifact, not a fundamental wall — a single net reaches 87.5% purely by thinking longer, and the hardest seeds (`1623`, `4148`) that no ≤1000-sim agent and no AZ-net portfolio member could win fall to pure budget.** Three consequences: (1) it is the cleanest ceiling-push of the project and needed **no retrain**; (2) it shrinks the portfolio — a single 87.5% agent needs far fewer voters to reach 100% (and `az.pt`@4000 alone already covers the two orphans the whole 5-agent portfolio needed MCTS RNGs for); (3) it strengthens the flywheel premise further still — `az.pt`@4000 is an even stronger potential bootstrap teacher than the @1000 (72%) figure that already beats MCTS@300 (44%). Caveat: budget is not free — there is per-seed redistribution (2000 wins 1926/3239 that 4000 loses; the *count* is monotone, individual seeds flip both ways, consistent with the "wins hinge on details" reframing), and 4000 sims/move costs ~6 s/move (32 games in ~18 min on 11 cores), so this is the *autosolver/offline* lever, not the live-hint budget. Open probe: does 8000/16000 keep climbing toward ~100% single-agent, and where does the ~p^36 chaining math finally bend the curve?
+
 **THE REFRAMING: every seed is winnable, and the ceiling is *reliability*, not strength (2026-07-16).** The one question six levers never asked — *can the lost games be won at all?* — has a decisive answer. `tmp/winnable.py` replays the seeds `az.pt`@300 loses, at higher AZ budget and across MCTS rollout RNGs (a control seed known to be won guards against a harness fault; AZ's own `seed` is **not** a probe — its eval search is deterministic, the rng feeds only the Dirichlet noise eval disables). Per-seed results on the 8 held-out seeds:
 
 | seed | az@300 | az@1000 | mcts@300/rng0 |
