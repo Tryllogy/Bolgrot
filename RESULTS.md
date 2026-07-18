@@ -8,15 +8,19 @@ than ~32 seeds is noise (one win = 3 points, binomial sd ≈ 2.8 wins at n=32).
 
 ## TL;DR
 
-- The full 6-wave game is **winnable**, but no single agent wins it reliably —
-  AlphaZero and MCTS both plateau at **~50–72%**. Nine training/search levers all
-  land at that ceiling.
-- The ceiling is **coverage, not strength**: *every* seed is winnable, but
-  different agents win *different* seeds.
-- Combining agents that fail on **disjoint** seeds, as a whole-game **cascade**,
-  reaches **100%** on two independent held-out windows at **~1.4× the cost** of a
-  single agent. This is deployable, not an oracle bound (a loss is observable —
-  the agent dies — and seeds are replayable).
+- The full 6-wave game is **winnable**, and a **single AlphaZero net wins 100%**
+  of held-out seeds given enough search — `az.pt`@8000 sims = **32/32**, no
+  retrain. The famous "~50–72% ceiling" was a *budget* artifact: it was only ever
+  measured at ≤1000 sims/move.
+- At a *fixed* low budget no single agent is reliable, and different agents win
+  *different* seeds — so a whole-game **cascade** of agents that fail on
+  **disjoint** seeds reaches 100% at **~1.4× the cost** of one (cheaper) agent.
+- So 100% is reachable **two ways**: one strong agent thinking longer
+  (~12 s/move), or a portfolio cascade of cheaper agents. The portfolio is a
+  *cost* optimisation, not a *correctness* necessity. Both are deployable (a loss
+  is observable — the agent dies — and seeds are replayable).
+- Model-free PPO wins **0%** either way — the winning line is too deep to stumble
+  into; only planning/learned-search agents win at all.
 
 ## Why the game is hard
 
@@ -38,14 +42,16 @@ tight margin — not search depth or exploration — is the real wall.
 | **AlphaZero `az.pt` @300** | **16/32 (50.0%)** | learned value head replaces the rollout; the reference number |
 | AlphaZero `az.pt` @1000 | 23/32 (71.9%) | AZ's *play* scales with budget where MCTS's does not |
 | AlphaZero `az.pt` @2000 | 25/32 (78.1%) | same net, more sims/move — no retrain |
-| **AlphaZero `az.pt` @4000** | **28/32 (87.5%)** | wins the chronic-loss and double-orphan seeds; still climbing |
+| AlphaZero `az.pt` @4000 | 28/32 (87.5%) | wins the chronic-loss and double-orphan seeds |
+| **AlphaZero `az.pt` @8000** | **32/32 (100%)** | wins **every** held-out seed — single agent, no retrain |
 
-**The single-agent "ceiling" was largely a budget artifact.** Every ~50-72%
-figure was measured at ≤1000 sims/move; the *same* net at 4000 sims reaches
-**87.5%**, monotonically, with no retraining — and wins the hardest seeds
-(`1623`, `4148`) that no ≤1000-sim agent could. The per-doubling gain is not
-shrinking, so it may climb further. This is the autosolver/offline lever (4000
-sims ≈ 6 s/move), not the live-hint budget.
+**The single-agent "ceiling" was a budget artifact.** Every ~50-72% figure was
+measured at ≤1000 sims/move; the *same* net climbs monotonically — 50 → 72 → 78
+→ 88 → **100%** at 8000 sims — with no retraining, winning even the hardest seeds
+(`1623`, `4148`) that no ≤1000-sim agent could. The per-doubling gain never
+shrank (+2, +3, +4). So a single agent *is* a 100% solver given enough search;
+this is the autosolver/offline ceiling (8000 sims ≈ 12 s/move), not the live-hint
+budget (live trades sims for latency and sits lower on the curve).
 
 Nine levers were tried to push a single agent past the ~50% band *at fixed
 (≤1000-sim) budget* — reward-ranking
@@ -127,13 +133,16 @@ Saved win-sets from the runs above: `tmp/floor_winsets.json` (16–47, 5 RNGs),
 
 ## Deployable recipe
 
-- **Full-game autosolver / ~100% win rate:** the portfolio cascade —
-  **2 AZ nets + 3 MCTS RNGs**, ~1.4× the cost of one agent. Replays whole games;
-  a loss is observed and the seed retried.
+- **Full-game autosolver / 100% win rate — two options:**
+  - *One strong agent:* `az.pt`@8000 sims alone = 100% (~12 s/move). Simplest.
+  - *Portfolio cascade:* 2 AZ nets + 3 MCTS RNGs at lower sims, 100% at ~1.4× a
+    cheaper agent. Which is compute-cheaper per solved seed is the open cost
+    question; both are deployable (a loss is observed, the seed retried).
 - **Live "best move here" hint** (chess.com-style): a *single* AlphaZero search on
-  the current position — **not** the cascade (which is a whole-game solver), and
-  **not** MCTS (the slow member; AZ ties or beats it at equal budget). Latency
-  scales with sims/move.
+  the current position — **not** the cascade (a whole-game solver), and **not**
+  MCTS (the slow member; AZ ties or beats it at equal budget). Latency scales with
+  sims/move, so the live budget sits lower on the curve than 8000 — a faster net
+  (the flywheel's only remaining use) would buy a higher hint quality per second.
 
 ## Artifacts
 
