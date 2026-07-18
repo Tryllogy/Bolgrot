@@ -124,4 +124,36 @@ teacher converges faster.
 `dc47854`+`0d3bbfc` portfolio 100%.
 
 ---
-<!-- RESULT section appended below by the cleanup waiter when the run finishes -->
+## STOPPED (cut by user, 2026-07-19 00:0x) — NOT benchmarked yet
+
+The maturation run was **cut at iter 200** before reaching the p_loss plateau
+(it was still falling ~0.02-0.03/session). Everything stopped, nothing running.
+
+- **Flywheel net frozen at iter 200, p_loss 1.541** — already *more mature than
+  az.pt* (1.65), but not converged. Checkpoint + win-buffer preserved:
+  `src/ai/az_flywheel_ckpt.pt` (+`.winbuf`), ready to resume or benchmark.
+- Gate `eval_win@1000` at iter 200 was 68.8% (selection seeds, noisy — NOT a verdict).
+- `az.pt` intact (`6b9ad21c50d175ebe266493696d0b121`).
+
+**Two options tomorrow:**
+- **Benchmark now (partial verdict):** extract the net and bench at 1000 sims on
+  32 held-out seeds vs az.pt 23/32, az_deep 21/32:
+  ```
+  uv run --extra ai python - <<'PY'
+  import torch
+  ck=torch.load("src/ai/az_flywheel_ckpt.pt",map_location="cpu",weights_only=True)
+  torch.save({k:ck[k] for k in ("state_dict","obs_size","num_actions","hidden","value_dim")},
+             "tmp/az_flywheel_iter200.pt"); print("iter",ck["iteration"])
+  PY
+  uv run --extra ai python tmp/pbench.py --nets tmp/az_flywheel_iter200.pt \
+    --sims 1000 --seeds 32 --seed-offset 16 --workers 11
+  ```
+  Caveat: iter 200 is mature but not plateaued, so a ~21-23 result is not yet
+  proof of "just faster" (could still improve); a ≥29 result WOULD be meaningful.
+- **Resume to plateau first (cleaner verdict):** `bash tmp/orch_flywheel2.sh`
+  (it resumes from the checkpoint, matures to plateau, then benchmarks). ~2-4h.
+
+Interpretation rule unchanged: **≥~29/32 = genuinely better; ~21-23/32 = just
+faster** (same asymptote as MCTS-teacher nets). Verify on window 48-79
+(`--seed-offset 48`) before believing any gain. Judge the *final/extracted* net,
+not the gate pick `src/ai/az_flywheel.pt`.
