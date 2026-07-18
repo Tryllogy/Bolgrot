@@ -8,19 +8,20 @@ than ~32 seeds is noise (one win = 3 points, binomial sd ≈ 2.8 wins at n=32).
 
 ## TL;DR
 
-- The full 6-wave game is **winnable**, and a **single AlphaZero net wins 100%**
-  of held-out seeds given enough search — `az.pt`@8000 sims = **32/32**, no
-  retrain. The famous "~50–72% ceiling" was a *budget* artifact: it was only ever
-  measured at ≤1000 sims/move.
-- At a *fixed* low budget no single agent is reliable, and different agents win
-  *different* seeds — so a whole-game **cascade** of agents that fail on
-  **disjoint** seeds reaches 100% at **~1.4× the cost** of one (cheaper) agent.
-- So 100% is reachable **two ways**: one strong agent thinking longer
-  (~12 s/move), or a portfolio cascade of cheaper agents. The portfolio is a
-  *cost* optimisation, not a *correctness* necessity. Both are deployable (a loss
-  is observable — the agent dies — and seeds are replayable).
-- Model-free PPO wins **0%** either way — the winning line is too deep to stumble
-  into; only planning/learned-search agents win at all.
+- The full 6-wave game is **winnable**, and search budget alone lifts a single
+  AlphaZero net from **50% to ~84–100%** — `az.pt`@8000 sims = **32/32 on one
+  held-out window, 27/32 on a second**, no retrain. The famous "~50–72% ceiling"
+  was a *budget* artifact: it was only ever measured at ≤1000 sims/move.
+- 100% is *window-dependent*, not guaranteed by one agent: even at 8000 sims the
+  second window loses 5 seeds — and they are *different* seeds from the ones that
+  failed at 1000 (budget **redistributes** the hard set, it doesn't dissolve it).
+- Different agents (and budgets) win *different* seeds, so a whole-game **cascade**
+  of agents that fail on **disjoint** seeds reaches 100% at **~1.4× the cost** of
+  one cheaper agent — this is the route to *guaranteed* 100%. Budget raises the
+  single-agent floor to ~84%+; the portfolio closes the rest.
+- Both are deployable (a loss is observable — the agent dies — and seeds are
+  replayable). Model-free PPO wins **0%** either way — the winning line is too
+  deep to stumble into; only planning/learned-search agents win at all.
 
 ## Why the game is hard
 
@@ -43,15 +44,19 @@ tight margin — not search depth or exploration — is the real wall.
 | AlphaZero `az.pt` @1000 | 23/32 (71.9%) | AZ's *play* scales with budget where MCTS's does not |
 | AlphaZero `az.pt` @2000 | 25/32 (78.1%) | same net, more sims/move — no retrain |
 | AlphaZero `az.pt` @4000 | 28/32 (87.5%) | wins the chronic-loss and double-orphan seeds |
-| **AlphaZero `az.pt` @8000** | **32/32 (100%)** | wins **every** held-out seed — single agent, no retrain |
+| **AlphaZero `az.pt` @8000** | **32/32 (window 16-47) · 27/32 (window 48-79)** | single agent, no retrain — 100% is window-dependent |
 
-**The single-agent "ceiling" was a budget artifact.** Every ~50-72% figure was
-measured at ≤1000 sims/move; the *same* net climbs monotonically — 50 → 72 → 78
-→ 88 → **100%** at 8000 sims — with no retraining, winning even the hardest seeds
-(`1623`, `4148`) that no ≤1000-sim agent could. The per-doubling gain never
-shrank (+2, +3, +4). So a single agent *is* a 100% solver given enough search;
-this is the autosolver/offline ceiling (8000 sims ≈ 12 s/move), not the live-hint
-budget (live trades sims for latency and sits lower on the curve).
+**The single-agent "ceiling" was a budget artifact — but 100% is
+window-dependent.** Every ~50-72% figure was measured at ≤1000 sims/move; the
+*same* net climbs monotonically far past it (16-47: 50 → 72 → 78 → 88 → 100%;
+48-79: 22/32@1000 → 27/32@8000 = 84%), no retraining. Budget wins the *known*
+hard seeds — on 48-79 the three orphans the portfolio needed MCTS voters for are
+all won at 8000 — but even at 8000 the second window loses 5 seeds, and they are
+*different* from the ones lost at 1000: **budget redistributes the residual hard
+set rather than eliminating it.** So a single agent is a ~84–100% solver
+(window-dependent), not a guaranteed one; guaranteed 100% still needs agent
+diversity (the portfolio). This is the autosolver/offline budget (8000 sims ≈
+12 s/move), not the live-hint budget.
 
 Nine levers were tried to push a single agent past the ~50% band *at fixed
 (≤1000-sim) budget* — reward-ranking
@@ -133,11 +138,13 @@ Saved win-sets from the runs above: `tmp/floor_winsets.json` (16–47, 5 RNGs),
 
 ## Deployable recipe
 
-- **Full-game autosolver / 100% win rate — two options:**
-  - *One strong agent:* `az.pt`@8000 sims alone = 100% (~12 s/move). Simplest.
-  - *Portfolio cascade:* 2 AZ nets + 3 MCTS RNGs at lower sims, 100% at ~1.4× a
-    cheaper agent. Which is compute-cheaper per solved seed is the open cost
-    question; both are deployable (a loss is observed, the seed retried).
+- **Full-game autosolver:**
+  - *One strong agent:* `az.pt`@8000 sims alone = ~84–100% (window-dependent,
+    ~12 s/move). Simplest, and enough if ~90% suffices.
+  - *Portfolio cascade (for guaranteed 100%):* 2 AZ nets + 3 MCTS RNGs — combines
+    agents that fail on disjoint seeds; a single high-budget agent still misses a
+    few seeds that only diversity (or yet more budget) covers. Both are deployable
+    (a loss is observed, the seed retried).
 - **Live "best move here" hint** (chess.com-style): a *single* AlphaZero search on
   the current position — **not** the cascade (a whole-game solver), and **not**
   MCTS (the slow member; AZ ties or beats it at equal budget). Latency scales with
