@@ -1,0 +1,135 @@
+# Results — beating Bolgrot with a search agent
+
+A readable summary of the AI work. The exhaustive research log (every lever, every
+dead end, exact commands) lives in `CLAUDE.md`; this file is the story and the
+takeaways. All win rates are on **32 held-out seeds** the training gate never saw
+(seed indices 16–47, i.e. `eval_seed(i) = 101·i + 7`); anything measured on fewer
+than ~32 seeds is noise (one win = 3 points, binomial sd ≈ 2.8 wins at n=32).
+
+## TL;DR
+
+- The full 6-wave game is **winnable**, but no single agent wins it reliably —
+  AlphaZero and MCTS both plateau at **~50–72%**. Nine training/search levers all
+  land at that ceiling.
+- The ceiling is **coverage, not strength**: *every* seed is winnable, but
+  different agents win *different* seeds.
+- Combining agents that fail on **disjoint** seeds, as a whole-game **cascade**,
+  reaches **100%** on two independent held-out windows at **~1.4× the cost** of a
+  single agent. This is deployable, not an oracle bound (a loss is observable —
+  the agent dies — and seeds are replayable).
+
+## Why the game is hard
+
+A flame is removed **only by jumping onto its tile**. But every jump also shoves
+adjacent flames outward (a flame chained into another flame is instant death) and
+then drags *all* other flames one tile toward the player (a flame reaching the
+player is instant death). So clearing greedily is self-defeating. HP is the
+currency — jumps cost 1 HP (refunded on a clear), the whole 40-HP bar affords
+~40 unproductive actions, and a win needs ~36 flames cleared without a single
+lethal miss. At any moment only ~2 of 17 legal moves make *safe* progress. That
+tight margin — not search depth or exploration — is the real wall.
+
+## The single-agent ceiling
+
+| agent | held-out win% (32 seeds) | notes |
+|---|---|---|
+| random / greedy / **PPO** | **0/32 (0%)** | model-free RL never wins — the ~60-move line is too deep to stumble into |
+| MCTS @300 sims | 14/32 (43.8%) | planning search; wins, but its `safe_greedy` rollout leaf is noisy |
+| **AlphaZero `az.pt` @300** | **16/32 (50.0%)** | learned value head replaces the rollout; the reference number |
+| AlphaZero `az.pt` @1000 | 23/32 (71.9%) | AZ's *play* scales with budget where MCTS's does not |
+
+Nine levers were tried to push a single agent past this band — reward-ranking
+variants (winloss / blend / twohead), a larger `REWARD_WIN`, a persistent
+win-buffer (+ cross-session carry), a multi-seed MCTS teacher, double network
+width (h128), and deeper (1000-sim) self-play. **All plateau at ~50%.** Each
+change won about as many seeds as it lost; the teacher is MCTS at ~50%, and no
+amount of better-retained / better-covered MCTS data crosses it.
+
+## The reframing: reliability, not strength
+
+The question no lever asked — *can the lost games be won at all?* — has a clean
+answer: **yes, all of them.** Replaying `az.pt`'s losses at higher budget and
+across MCTS rollout RNGs wins every one. And crucially:
+
+- **No single config wins them all** — each wins a *different* ~60%.
+- Tripling AZ's search budget (300→1000) **re-rolls which seeds win** more than it
+  raises the count (+7 wins, but on the same net a couple flip each way).
+- The two strong AZ nets (`az.pt`@1000 = 23/32, `az_deep`@1000 = 21/32) miss only
+  **2 common** seeds; their union is 30/32.
+
+So the losses have no repairable local cause — five stories about them (endgame
+HP attrition, "dies with 1–2 flames left", a broken search, HP waste, a locatable
+fatal blunder) were each measured and refuted. Wins hinge on details no prior or
+value controls, so any perturbation just redistributes them. **The fix is not a
+better agent; it is combining agents that fail on different seeds.**
+
+## The portfolio cascade
+
+Order agents best-first, replay the seed with each until one wins. Win rate =
+union of win-sets; cost = agents replayed until the first win (you never need to
+know in advance which one wins). Per-move vote-averaging does **not** work — it
+destroys the commitment a single ~60-move line needs (measured 4/8); diversity
+must be combined at **whole-game** granularity.
+
+Default portfolio = **2 AlphaZero nets @1000 + 3 MCTS@300 rollout-RNG voters**,
+measured fresh on two independent held-out windows:
+
+| window | AZ-only union | + MCTS voters | cascade cost |
+|---|---|---|---|
+| seeds 16–47 | 30/32 (orphans 3441, 4148) | **32/32 (100%)** | 1.34× |
+| seeds 48–79 | 29/32 (orphans 6572, 7178, 7380) | **32/32 (100%)** | 1.44× |
+
+The AZ nets each plateau ~69–72%; the MCTS RNG voters — each winning a *different*
+~40% by rollout luck — cover exactly the orphans the nets miss. Because most seeds
+fall to the best agent first-try, mean cost stays near 1: the portfolio is
+~1.4× one agent, not 5×.
+
+### Cost floor
+
+The smallest voter subset that covers every orphan (a set-cover over the RNGs):
+
+- **16–47: k=1** — one RNG (`rng1`) alone covers both orphans.
+- **48–79: k=2** — no single RNG covers all three; the hardest orphan (`7380`) is
+  won by **only 1 of 5** sampled RNGs.
+
+So **k=2 is the optimal-selection floor, k=3 the blind-selection robust floor** —
+the gap is the price of not knowing which RNG covers each rare orphan. Extra
+voters are **cost-free** (flat cascade cost — they only run on already-lost
+seeds), so the deployable choice carries a few RNGs as free insurance.
+
+## Reproduce
+
+Everything is in `src/ai/portfolio.py` (parallel, one game per core):
+
+```bash
+# run the full portfolio fresh on a held-out window, save per-seed win-sets:
+uv run --extra ai python -m src.ai.portfolio \
+    --seed-offset 16 --seeds 32 \
+    --nets src/ai/az.pt tmp/az_deep2_final_iter300.pt \
+    --az-sims 1000 --mcts-rngs 3 --json tmp/portfolio_16.json
+
+# recompute the analysis (union, cost, cost floor) from a saved dump, no games:
+uv run --extra ai python -m src.ai.portfolio --from-json tmp/portfolio_16.json
+```
+
+Saved win-sets from the runs above: `tmp/floor_winsets.json` (16–47, 5 RNGs),
+`tmp/floor2_winsets.json` (48–79, 5 RNGs).
+
+## Deployable recipe
+
+- **Full-game autosolver / ~100% win rate:** the portfolio cascade —
+  **2 AZ nets + 3 MCTS RNGs**, ~1.4× the cost of one agent. Replays whole games;
+  a loss is observed and the seed retried.
+- **Live "best move here" hint** (chess.com-style): a *single* AlphaZero search on
+  the current position — **not** the cascade (which is a whole-game solver), and
+  **not** MCTS (the slow member; AZ ties or beats it at equal budget). Latency
+  scales with sims/move.
+
+## Artifacts
+
+- `src/ai/az.pt` — the canonical best single net (64-wide, ~50% @300, ~72% @1000).
+  **Never overwrite it.**
+- `tmp/az_deep2_final_iter300.pt` — the second strong net (deep 1000-sim training),
+  wins seeds `az.pt` cannot; the portfolio's other AZ member.
+- `src/ai/mcts.py`, `src/ai/alphazero.py` — the two search agents.
+- `src/ai/portfolio.py` — the cascade + coverage/cost-floor tool (this analysis).
