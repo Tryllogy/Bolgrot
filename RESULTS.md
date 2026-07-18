@@ -12,16 +12,19 @@ than ~32 seeds is noise (one win = 3 points, binomial sd ≈ 2.8 wins at n=32).
   AlphaZero net from **50% to ~84–100%** — `az.pt`@8000 sims = **32/32 on one
   held-out window, 27/32 on a second**, no retrain. The famous "~50–72% ceiling"
   was a *budget* artifact: it was only ever measured at ≤1000 sims/move.
-- 100% is *window-dependent*, not guaranteed by one agent: even at 8000 sims the
-  second window loses 5 seeds — and they are *different* seeds from the ones that
-  failed at 1000 (budget **redistributes** the hard set, it doesn't dissolve it).
-- Different agents (and budgets) win *different* seeds, so a whole-game **cascade**
-  of agents that fail on **disjoint** seeds reaches 100% at **~1.4× the cost** of
-  one cheaper agent — this is the route to *guaranteed* 100%. Budget raises the
-  single-agent floor to ~84%+; the portfolio closes the rest.
-- Both are deployable (a loss is observable — the agent dies — and seeds are
-  replayable). Model-free PPO wins **0%** either way — the winning line is too
-  deep to stumble into; only planning/learned-search agents win at all.
+- 100% at a *fixed* budget is window-dependent (48-79 loses 5 seeds at 8000), and
+  those 5 are *different* from the ones lost at 1000 — budget **redistributes**
+  the hard set. But there is **no budget-resistant core**: all 5 residual seeds
+  are won at 16000 sims. So a single net solves every seed by **budget
+  escalation** (retry at rising sims/move, stop at the first win).
+- Guaranteed 100% therefore has **two equivalent cascade routes**, and agent
+  diversity is *not* strictly required: (a) one net, escalating budget; (b) the
+  portfolio — different agents at a fixed budget (~1.4× cost). Both exploit the
+  same fact: at a fixed budget, configs fail on disjoint seeds, but the union
+  (over budget *or* over agents) is 100%.
+- All deployable (a loss is observable — the agent dies — and seeds are
+  replayable). Model-free PPO wins **0%** — the winning line is too deep to
+  stumble into; only planning/learned-search agents win at all.
 
 ## Why the game is hard
 
@@ -138,13 +141,16 @@ Saved win-sets from the runs above: `tmp/floor_winsets.json` (16–47, 5 RNGs),
 
 ## Deployable recipe
 
-- **Full-game autosolver:**
-  - *One strong agent:* `az.pt`@8000 sims alone = ~84–100% (window-dependent,
-    ~12 s/move). Simplest, and enough if ~90% suffices.
-  - *Portfolio cascade (for guaranteed 100%):* 2 AZ nets + 3 MCTS RNGs — combines
-    agents that fail on disjoint seeds; a single high-budget agent still misses a
-    few seeds that only diversity (or yet more budget) covers. Both are deployable
-    (a loss is observed, the seed retried).
+- **Full-game autosolver — three deployable options, all reach ~100%:**
+  - *One agent, fixed budget:* `az.pt`@8000 = ~84–100% (window-dependent,
+    ~12 s/move). Simplest; enough if ~90% suffices.
+  - *One agent, escalating budget (guaranteed 100%):* replay at 1000 → … → 16000
+    sims, stop at the first win. No budget-resistant core exists, so every seed
+    falls to enough sims; most win cheap, so mean cost is low. One net, no MCTS.
+  - *Portfolio cascade (guaranteed 100%):* 2 AZ nets + 3 MCTS RNGs at a fixed
+    budget, ~1.4× a cheaper agent. Agent diversity instead of budget diversity.
+  - Which of the two guaranteed routes is compute-cheaper per solved seed is the
+    remaining open question. All are deployable (a loss is observed, seed retried).
 - **Live "best move here" hint** (chess.com-style): a *single* AlphaZero search on
   the current position — **not** the cascade (a whole-game solver), and **not**
   MCTS (the slow member; AZ ties or beats it at equal budget). Latency scales with
