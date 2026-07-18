@@ -537,6 +537,65 @@ def mcts_bootstrap_game(seed: int, simulations: int, gamma: float,
     return samples, game.won
 
 
+def az_bootstrap_game(net: ActorCritic, seed: int, simulations: int,
+                      gamma: float, rng: random.Random, num_actions: int,
+                      num_waves: int | None = None,
+                      flames_per_wave: int | None = None,
+                      spawn_radius: int | None = None,
+                      spawn_formation: str | None = None,
+                      c_puct: float = 1.5,
+                      value_mode: str = "shaped",
+                      max_steps: int = 500) -> tuple[list[_Sample], bool]:
+    """Play one game with a **fixed strong teacher net's PUCT search** and record
+    it as AlphaZero training samples — the AZ analogue of
+    :func:`mcts_bootstrap_game`.
+
+    The teacher is a separate, frozen net searched at high ``simulations`` (e.g.
+    ``az.pt`` @4000), *not* the net being trained. It is a stronger and more
+    diverse teacher than MCTS@300 — measured held-out on 32 seeds, ``az.pt``@1000
+    = 72% and @4000 = 88% versus MCTS@300 = 44%, and it wins seeds MCTS never does
+    — which is exactly what the project's "the teacher is the ceiling" diagnosis
+    asks for (every prior lever bootstrapped from a ~50% teacher and plateaued
+    there). Distilling this teacher's visit distribution and winning lines is the
+    one untried, well-motivated flywheel step: it can only raise the student's
+    prior toward the teacher's search, shifting the whole budget curve left (a
+    given win rate reached at fewer sims/move — a *faster* net), though a prior
+    cannot fully substitute for the teacher's extra search depth.
+
+    Same ``_Sample`` layout as :func:`self_play_game` and
+    :func:`mcts_bootstrap_game` (visit distribution as the policy target,
+    discounted return-to-go as the value target). Greedy on visits, no Dirichlet
+    noise — these games are meant to be strong, not exploratory. ``value_mode``
+    must match the student's training mode (and the teacher net's).
+    """
+    game = Game(Player(*constant.BASE_PLAYER_POS), seed=seed,
+                num_waves=num_waves, flames_per_wave=flames_per_wave,
+                spawn_radius=spawn_radius, spawn_formation=spawn_formation)
+    samples: list[_Sample] = []
+    rewards: list[float] = []
+
+    for _ in range(max_steps):
+        if game.done:
+            break
+        root, _ = _search(game, net, simulations, c_puct, gamma, rng,
+                          value_mode=value_mode)
+        counts = _visit_counts(root)
+        if not counts:
+            break
+        pi = [0.0] * num_actions
+        total = sum(counts.values())
+        for a, n in counts.items():
+            pi[a] = n / total
+        samples.append(_Sample(obs=game.get_observation(),
+                               mask=game.legal_actions(), pi=pi))
+        action = max(counts, key=lambda a: counts[a])
+        reward, _ = game.step(action)
+        rewards.append(reward)
+
+    _fill_value_targets(samples, rewards, game.won, gamma, value_mode)
+    return samples, game.won
+
+
 # --- Parallel game workers ---------------------------------------------------
 # Self-play games, MCTS bootstrap slots and gate-eval games are all independent
 # given a fixed net snapshot, and one such game saturates exactly one core (the
@@ -567,6 +626,20 @@ def _worker_load_net(path: str, version: int) -> ActorCritic:
     return _WORKER_NET["net"]
 
 
+# The AZ bootstrap teacher is a *frozen* net (never re-shipped), so it gets its
+# own cache slot — sharing `_WORKER_NET` would thrash against the training net
+# that self-play/eval reload every iteration.
+_WORKER_TEACHER: dict = {}
+
+
+def _worker_load_teacher(path: str) -> ActorCritic:
+    if _WORKER_TEACHER.get("path") != path:
+        from .policy import load_policy
+        _WORKER_TEACHER["net"] = load_policy(path)
+        _WORKER_TEACHER["path"] = path
+    return _WORKER_TEACHER["net"]
+
+
 def _selfplay_task(args: tuple) -> tuple[list[_Sample], bool]:
     (net_path, version, seed, sims, c_puct, gamma, num_actions, stage,
      dirichlet_alpha, temp_moves, value_mode) = args
@@ -595,6 +668,30 @@ def _bootstrap_task(args: tuple) -> tuple[list[_Sample], bool, int]:
             rng=rng, num_actions=num_actions,
             num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
             spawn_formation=fm, value_mode=value_mode)
+        attempts += 1
+        if won:
+            break
+    return samples, won, attempts
+
+
+def _az_bootstrap_task(args: tuple) -> tuple[list[_Sample], bool, int]:
+    """One AZ-teacher bootstrap slot: re-roll seeds until the frozen teacher net
+    wins (cap 1+retries), return ``(samples_of_last_attempt, won, attempts)``.
+    The teacher is loaded once per worker and cached (it never changes)."""
+    (slot_seed, retries, teacher_path, sims, c_puct, gamma, num_actions, stage,
+     value_mode) = args
+    net = _worker_load_teacher(teacher_path)
+    rng = random.Random(slot_seed)
+    nw, fpw, sr, fm = stage
+    samples: list[_Sample] = []
+    won = False
+    attempts = 0
+    for _ in range(1 + max(0, retries)):
+        samples, won = az_bootstrap_game(
+            net, seed=rng.randrange(1 << 30), simulations=sims, gamma=gamma,
+            rng=rng, num_actions=num_actions,
+            num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
+            spawn_formation=fm, c_puct=c_puct, value_mode=value_mode)
         attempts += 1
         if won:
             break
@@ -635,6 +732,16 @@ class AZConfig:
     # into winning trajectories so the win buffer covers the pattern space, not
     # just the lucky half. 0 = off (byte-for-byte the old single-attempt path).
     bootstrap_win_retries: int = 0  # extra MCTS seeds per slot to obtain a win
+    # Bootstrap teacher: "mcts" (the default, ~44-50% at 300 sims) or "az" — a
+    # frozen strong AZ net (``bootstrap_teacher_path``) searched at
+    # ``bootstrap_simulations`` sims/move. The AZ teacher is the flywheel step:
+    # az.pt@1000/4000 is a *stronger and more diverse* teacher than MCTS@300
+    # (72%/88% vs 44% held-out, and wins seeds MCTS never does), which is exactly
+    # what "the teacher is the ceiling" asks for — every prior lever bootstrapped
+    # from a ~50% teacher and plateaued there. "mcts" is byte-for-byte the old
+    # path (empty teacher path).
+    bootstrap_teacher: str = "mcts"   # "mcts" | "az"
+    bootstrap_teacher_path: str = ""  # frozen AZ teacher net (bootstrap_teacher="az")
     # Gate-eval search budget. None = evaluate at `simulations`, i.e. the budget
     # the net actually plays and is benchmarked at. The old fixed 120 was the
     # gate's central defect: the metric both *understates* the net (line stage:
@@ -906,15 +1013,25 @@ def train(cfg: AZConfig) -> ActorCritic:
             return
         nw, fpw, sr, fm = (tuple(stages[idx]) + (None,))[:4]
         max_tries = 1 + max(0, cfg.bootstrap_win_retries)
+        use_az = cfg.bootstrap_teacher == "az"
         wins = 0
         attempts = 0
         if pool is not None:
             # One slot per worker; the seed re-roll loop runs inside the task.
-            tasks = [(rng.randrange(1 << 30), cfg.bootstrap_win_retries,
-                      cfg.bootstrap_simulations, cfg.gamma, num_actions,
-                      (nw, fpw, sr, fm), cfg.value_mode)
-                     for _ in range(cfg.bootstrap_games)]
-            for samples, won, n_attempts in pool.map(_bootstrap_task, tasks):
+            if use_az:
+                task_fn = _az_bootstrap_task
+                tasks = [(rng.randrange(1 << 30), cfg.bootstrap_win_retries,
+                          cfg.bootstrap_teacher_path, cfg.bootstrap_simulations,
+                          cfg.c_puct, cfg.gamma, num_actions, (nw, fpw, sr, fm),
+                          cfg.value_mode)
+                         for _ in range(cfg.bootstrap_games)]
+            else:
+                task_fn = _bootstrap_task
+                tasks = [(rng.randrange(1 << 30), cfg.bootstrap_win_retries,
+                          cfg.bootstrap_simulations, cfg.gamma, num_actions,
+                          (nw, fpw, sr, fm), cfg.value_mode)
+                         for _ in range(cfg.bootstrap_games)]
+            for samples, won, n_attempts in pool.map(task_fn, tasks):
                 attempts += n_attempts
                 if won:
                     buffer.extend(samples)
@@ -924,20 +1041,31 @@ def train(cfg: AZConfig) -> ActorCritic:
                 elif samples:
                     buffer.extend(samples)
         else:
+            teacher = (_worker_load_teacher(cfg.bootstrap_teacher_path)
+                       if use_az else None)
             for _ in range(cfg.bootstrap_games):
-                # Multi-seed: re-roll fresh game seeds until MCTS wins (or the
-                # retry budget is spent). Keep only the winning line; on
-                # exhaustion fall back to the last attempt so the rolling
-                # buffer still gets data.
+                # Multi-seed: re-roll fresh game seeds until the teacher wins (or
+                # the retry budget is spent). Keep only the winning line; on
+                # exhaustion fall back to the last attempt so the rolling buffer
+                # still gets data.
                 last_samples: list[_Sample] | None = None
                 won = False
                 for _try in range(max_tries):
-                    samples, won = mcts_bootstrap_game(
-                        seed=rng.randrange(1 << 30),
-                        simulations=cfg.bootstrap_simulations, gamma=cfg.gamma,
-                        rng=rng, num_actions=num_actions,
-                        num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
-                        spawn_formation=fm, value_mode=cfg.value_mode)
+                    if use_az:
+                        samples, won = az_bootstrap_game(
+                            teacher, seed=rng.randrange(1 << 30),
+                            simulations=cfg.bootstrap_simulations,
+                            gamma=cfg.gamma, rng=rng, num_actions=num_actions,
+                            num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
+                            spawn_formation=fm, c_puct=cfg.c_puct,
+                            value_mode=cfg.value_mode)
+                    else:
+                        samples, won = mcts_bootstrap_game(
+                            seed=rng.randrange(1 << 30),
+                            simulations=cfg.bootstrap_simulations,
+                            gamma=cfg.gamma, rng=rng, num_actions=num_actions,
+                            num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
+                            spawn_formation=fm, value_mode=cfg.value_mode)
                     attempts += 1
                     last_samples = samples
                     if won:
@@ -949,9 +1077,11 @@ def train(cfg: AZConfig) -> ActorCritic:
                     wins += 1
                 elif last_samples is not None:
                     buffer.extend(last_samples)
+        teacher_tag = (f"AZ({os.path.basename(cfg.bootstrap_teacher_path)})"
+                       if use_az else "MCTS")
         tag = (f" (multi-seed <={cfg.bootstrap_win_retries} retries, "
                f"{attempts} games)" if cfg.bootstrap_win_retries else "")
-        print(f"Bootstrapped {cfg.bootstrap_games} MCTS slots{tag} at "
+        print(f"Bootstrapped {cfg.bootstrap_games} {teacher_tag} slots{tag} at "
               f"{cfg.bootstrap_simulations} sims (stage {idx}): "
               f"{wins} won, buffer now {len(buffer)} samples", flush=True)
 

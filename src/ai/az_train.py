@@ -49,7 +49,19 @@ def main() -> None:
                              "before training (gives the net winning lines to "
                              "imitate; self-play never wins the full game)")
     parser.add_argument("--bootstrap-simulations", type=int, default=300,
-                        help="MCTS sims/move for the bootstrap games")
+                        help="sims/move for the bootstrap games (MCTS, or the "
+                             "AZ teacher when --bootstrap-teacher az)")
+    parser.add_argument("--bootstrap-teacher", choices=("mcts", "az"),
+                        default="mcts",
+                        help="bootstrap teacher: 'mcts' (default, ~44%% at 300 "
+                             "sims) or 'az' — a frozen strong AZ net "
+                             "(--bootstrap-teacher-path) searched at "
+                             "--bootstrap-simulations. The flywheel step: "
+                             "az.pt@4000 (88%%) is a much stronger, more diverse "
+                             "teacher than MCTS@300")
+    parser.add_argument("--bootstrap-teacher-path", default="",
+                        help="frozen AZ teacher checkpoint for "
+                             "--bootstrap-teacher az (e.g. src/ai/az.pt)")
     parser.add_argument("--bootstrap-win-retries", type=int, default=0,
                         help="multi-seed teacher: extra fresh MCTS game seeds "
                              "per bootstrap slot to obtain a win (single-seed "
@@ -143,6 +155,13 @@ def main() -> None:
         from . import alphazero
         alphazero.VALUE_SCALE = args.value_scale
 
+    if args.bootstrap_teacher == "az":
+        if not args.bootstrap_teacher_path:
+            raise SystemExit("--bootstrap-teacher az needs "
+                             "--bootstrap-teacher-path PATH")
+        if not os.path.exists(args.bootstrap_teacher_path):
+            raise SystemExit(f"teacher not found: {args.bootstrap_teacher_path}")
+
     if args.resume is None:
         resume_from = ""
     elif args.resume == "":
@@ -159,6 +178,8 @@ def main() -> None:
         bootstrap_games=args.bootstrap_games,
         bootstrap_simulations=args.bootstrap_simulations,
         bootstrap_win_retries=args.bootstrap_win_retries,
+        bootstrap_teacher=args.bootstrap_teacher,
+        bootstrap_teacher_path=args.bootstrap_teacher_path,
         win_buffer_fraction=args.win_buffer_frac,
         c_puct=args.c_puct,
         learning_rate=args.lr,
