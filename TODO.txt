@@ -1,34 +1,102 @@
-========================================================================
- BOLGROT — TODO
-========================================================================
+================================================================================
+BOLGROT WEB — ROADMAP (guide mode: you code, I mentor)
+================================================================================
+Stack recommandé : FastAPI (backend Python) + Vue 3/Vite (front JS) + Canvas 2D.
+Pourquoi : FastAPI expose ton Game/AZ en HTTP typé avec une doc auto (/docs) qui
+te sert de banc de test AVANT d'avoir un front ; Vue 3 + Vite = dev rapide, et le
+board iso se dessine au Canvas (le Renderer pygame ne se transporte pas, mais la
+projection iso est 2 lignes de maths — je te guide).
 
-------------------------------------------------------------------------
- [ ] Offline fight solver / planner   (added 2026-07-07)
-------------------------------------------------------------------------
-Goal: an offline tool that computes the OPTIMAL move sequence for a given
-board of the Bolgrot fight, which I then play BY HAND.
+Règle du jeu : à chaque tâche je t'explique le concept + les pièges, tu écris le
+code, on relit ensemble. Coche au fur et à mesure. [ ] = à faire, [~] = en cours,
+[x] = fait.
 
-Why not bot the real Dofus client:
-  - Violates Ankama's Terms of Service (bannable, permanent).
-  - Shared multiplayer world — affects other players.
-  - Brittle: reading the live Unity client state is fragile.
-  => This solver is the legitimate alternative: it only advises; I make
-     the moves myself in the real game.
+--------------------------------------------------------------------------------
+PHASE 0 — DÉCISIONS & SETUP  (30-60 min)
+--------------------------------------------------------------------------------
+[x] 0.1  Forme du produit : (A) HUMAIN JOUE + HINTS IA (chess.com-style). Choisi.
+         -> le front gère les clics/coups (phase 3 complète), bouton "Indice"
+         qui surligne le meilleur coup AZ (phase 4), disclaimer honnête (5.1).
+[x] 0.2  Dossiers `server/` et `web/` créés. Le jeu reste dans `src/` (importé).
+[x] 0.3  Extra `web` (fastapi + uvicorn[standard]) ajouté à pyproject.toml ;
+         `uv sync --extra web --extra ai` OK (fastapi 0.139, uvicorn 0.51,
+         pydantic 2.13). Lancer le serveur : `uv run --extra web --extra ai ...`.
+[x] 0.4  Node installé via nvm : node v24.18.0. Front prêt à scaffolder.
 
-Plan:
-  1. Make the simulator match the REAL Bolgrot mechanics precisely
-     (spells, AP, flame spawn patterns, map). Verify against the fight.
-  2. Add src/solver/ with an exact search over game states
-     (minimax / expectimax / BFS). For a fixed turn-based puzzle boss an
-     exact solver beats a learned policy and is PROVABLY optimal.
-  3. Output as advice, e.g. "jump west, then clear the NE flame".
-     NOT automation of the live client.
+--------------------------------------------------------------------------------
+PHASE 1 — BACKEND API  (le pont Python -> HTTP)   ★ premier milestone motivant
+--------------------------------------------------------------------------------
+But : jouer une partie ENTIÈRE via l'auto-doc FastAPI (/docs), sans aucun front.
+[x] 1.1  Fonction `view(game)` -> état de rendu (player/bolgrot/flames/spells/
+         waves/turn/done/won). Dédiée, PAS get_state (qui est pour la recherche).
+[ ] 1.2  (option/plus tard) Modèles Pydantic en réponse. Les dicts marchent déjà ;
+         Pydantic ajoutera validation + doc plus riche. Non-bloquant.
+[x] 1.3  Session : dict `GAMES: {game_id: Game}` en mémoire. (Multi-joueurs: ph.6)
+[x] 1.4  Endpoints faits : POST /games, GET /games/{id} (+404), POST /step.
+         RESTE : GET /games/{id}/legal (actions légales) -> avant la Phase 3.
+[x] 1.5  MILESTONE : partie jouable via curl/docs (create->step 16->1ère vague OK).
+[ ] 1.6  Mapper ACTIONS -> libellés lisibles pour le front. -> avant la Phase 3.
 
-Related: the RL environment API lives on Game (see CLAUDE.md); a PPO
-agent under src/ai/ is the learned-policy alternative to the solver.
+--------------------------------------------------------------------------------
+PHASE 2 — FRONT : AFFICHER LE BOARD  (lecture seule)   ★ première image
+--------------------------------------------------------------------------------
+[ ] 2.1  Scaffolder Vite + Vue 3 dans `web/`. Comprendre la structure (main.js,
+         App.vue, composants).
+[ ] 2.2  Appeler POST /games au chargement, afficher l'état BRUT (JSON) d'abord —
+         prouver que front<->back communiquent (CORS à gérer, je te préviens).
+[x] 2.3a Backend GET /map (547 cellules, statiques).
+[x] 2.3b Front : losanges du board dessinés au Canvas (projection iso OK).
+[x] 2.3c Front : joueur/Bolgrot/flammes dessinés + BONUS next_spawn (violet).
+[x] 2.4  Barre d'info HP/PA/vague/flammes. -> MILESTONE Phase 2 : board complet ✅
 
-------------------------------------------------------------------------
- Notes / ideas (optional, lower priority)
-------------------------------------------------------------------------
-  [ ] Curriculum for PPO training: start with fewer waves (NB_WAVES) so
-      wins are actually sampled, raise difficulty as the bot improves.
+--------------------------------------------------------------------------------
+PHASE 3 — FRONT : INTERACTIVITÉ  (jouer des coups)
+--------------------------------------------------------------------------------
+[ ] 3.1  Sélection de sort (clic sur un sort / touches 1-2-3) -> demander la
+         previsu au backend -> surligner les tuiles atteignables.
+[ ] 3.2  Clic sur une tuile cible -> trouver l'action_index correspondant ->
+         POST /step -> re-render. Gérer le mapping (tuile cliquée -> (dx,dy) ->
+         index dans ACTIONS).
+[ ] 3.3  Bouton "Fin de tour" (action end-turn = dernier index).
+[ ] 3.4  Écrans win/lose. -> MILESTONE : jeu jouable au navigateur.
+
+--------------------------------------------------------------------------------
+PHASE 4 — INTÉGRER L'IA  (le hint)
+--------------------------------------------------------------------------------
+[ ] 4.1  Endpoint POST /games/{id}/hint?sims=1000 -> charge src/ai/az.pt une
+         seule fois (au démarrage, pas par requête !), lance az_action_fn ->
+         renvoie l'action suggérée + le libellé. Latence mesurée ~0.9s @1000.
+[ ] 4.2  Front : bouton "Indice" -> état de chargement (spinner ~1s) -> surligner
+         le coup suggéré sur le board.
+[ ] 4.3  PERF (important) : la recherche AZ est CPU-bound et BLOQUE. Pour du
+         multi-utilisateur, la sortir du thread web (run_in_executor / process
+         pool) sinon un hint fige tout le serveur. Je t'explique async vs CPU-bound.
+[ ] 4.4  (option) Toggle "Autoplay" : l'IA joue chaque coup en boucle.
+[ ] 4.5  (option) Sélecteur de budget (sims) exposant le compromis
+         qualité/latence (300=0.24s, 1000=0.9s, 8000=7s).
+
+--------------------------------------------------------------------------------
+PHASE 5 — PRODUIT & POLISH
+--------------------------------------------------------------------------------
+[ ] 5.1  Disclaimer honnête ("bot très fort, victoire non garantie" — cf. le
+         cadrage chess.com : 100% seulement via retries/cascade, pas en 1 passe).
+[ ] 5.2  (option) "Réessayer plus fort" = escalade de budget (déterministe + pas
+         de noyau résistant -> converge vers la victoire). PIÈGE : retry au même
+         budget + même seed = même défaite ; il faut CHANGER le budget ou le seed.
+[ ] 5.3  Animations (flammes qui bougent), sprites (réutiliser src/sprites_png).
+[ ] 5.4  Responsive / thème.
+
+--------------------------------------------------------------------------------
+PHASE 6 — DÉPLOIEMENT
+--------------------------------------------------------------------------------
+[ ] 6.1  Build front (vite build -> statique) servi par FastAPI ou un CDN.
+[ ] 6.2  uvicorn/gunicorn en prod ; workers = process pool pour les recherches AZ.
+[ ] 6.3  État de session : passer du dict mémoire à qqch de robuste (le jeu est
+         DÉTERMINISTE -> on peut ne stocker que seed + liste d'actions et rejouer,
+         plutôt qu'un objet en RAM par joueur). Concept clé, je détaille le moment venu.
+[ ] 6.4  Docker + hébergement.
+
+================================================================================
+PROCHAINE ÉTAPE IMMÉDIATE : confirmer 0.1 (forme du produit), puis on attaque
+la Phase 1 ensemble (backend FastAPI). Dis-moi quand tu es prêt.
+================================================================================

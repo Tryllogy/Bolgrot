@@ -48,6 +48,9 @@ alphazero-resume: install
 play: install
 	$(UV) run --extra ai python -m $(SRC).ai.play
 
+serve: install
+	$(UV) run --extra web --extra ai uvicorn server.app:app --reload
+
 lint:
 	flake8 $(SRC)
 	mypy $(SRC)

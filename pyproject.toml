@@ -20,6 +20,10 @@ ai = [
     "torch>=2.0",
     "numpy>=1.24",
 ]
+web = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+]
 
 [project.scripts]
 bolgrot = "src.__main__:main"
