@@ -156,13 +156,32 @@ Saved win-sets from the runs above: `tmp/floor_winsets.json` (16–47, 5 RNGs),
 - **Full-game autosolver — three deployable options, all reach ~100%:**
   - *One agent, fixed budget:* `az.pt`@8000 = ~84–100% (window-dependent,
     ~12 s/move). Simplest; enough if ~90% suffices.
-  - *One agent, escalating budget (guaranteed 100%):* replay at 1000 → … → 16000
-    sims, stop at the first win. No budget-resistant core exists, so every seed
-    falls to enough sims; most win cheap, so mean cost is low. One net, no MCTS.
+  - *One agent, escalating budget (guaranteed 100%):* replay at 1000 → 2000 →
+    4000 (→ 8000 → 16000), stop at the first win. No budget-resistant core exists,
+    so every seed falls to enough sims; most win cheap, so mean cost is low. One
+    net, no MCTS.
   - *Portfolio cascade (guaranteed 100%):* 2 AZ nets + 3 MCTS RNGs at a fixed
     budget, ~1.4× a cheaper agent. Agent diversity instead of budget diversity.
-  - Which of the two guaranteed routes is compute-cheaper per solved seed is the
-    remaining open question. All are deployable (a loss is observed, seed retried).
+  - **Cost — the two routes essentially tie (2026-07-19).** Measured wall-clock
+    seconds per solved seed on both held-out windows (per-move times measured:
+    az@1000 = 0.805 s/move, mcts@300 = 3.647 s/move; AZ scales linearly with sims):
+
+    | window | escalating-budget (1 net) | portfolio (2 AZ + MCTS) |
+    |---|---|---|
+    | 16–47 | 78.8 s/seed | **73.0 s/seed** |
+    | 48–79 | **87.5 s/seed** | 94.3 s/seed |
+
+    Within ~8%, and the order flips by window — neither dominates. Both are
+    dominated by the ~70% of seeds won on the first cheap `az@1000` try (~47 s).
+    **The escalation never reaches its expensive rungs:** because win-sets are
+    *non-nested* (a seed lost at a high fixed budget is almost always won at a
+    *lower* one), the union of the 1000/2000/4000 rungs already covers 32/32 on
+    both windows, so escalation stops by **4000 sims** and the 16000-sim rung — only
+    ever needed at *fixed* budget — is never paid. **Recommendation: escalating
+    budget on one net** — same cost, one model, no MCTS, fewer moving parts. The
+    portfolio only earns its extra parts (2 nets + MCTS RNGs) if you want
+    agent-diversity robustness against a seed that resists budget on one net.
+    (Tool: `tmp/cascade_cost.py` / `cascade_cost2.py` over the saved win-sets.)
 - **Live "best move here" hint** (chess.com-style): a *single* AlphaZero search on
   the current position — **not** the cascade (a whole-game solver), and **not**
   MCTS (the slow member; AZ ties or beats it at equal budget). Latency scales with

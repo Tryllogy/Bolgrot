@@ -163,10 +163,14 @@ escalation, and guaranteed 100% is deployable via either cascade route
 the game is unsolved.
 
 Open threads, in rough priority (none urgent):
-1. **Cost question:** which guaranteed-100% cascade is compute-cheaper per solved
-   seed — budget-escalate one net (1000→…→16000) vs the portfolio (2 AZ + 3 MCTS
-   RNGs at fixed budget). Measurable with existing tooling (`portfolio.py`,
-   `pbench.py`, `probe16k.py`).
+1. ~~**Cost question:** which guaranteed-100% cascade is compute-cheaper.~~
+   **RESOLVED (2026-07-19): they tie (~75-95 s/seed, ≤8% apart, order flips by
+   window).** Both dominated by the ~70% of seeds won at the first cheap az@1000
+   try; the escalation never reaches its 8000/16000 rungs (non-nested win-sets ⇒
+   union of 1000/2000/4000 = 32/32, stops by 4000). **Recommendation: escalate
+   budget on one net** — same cost, one model, no MCTS. Portfolio only for
+   agent-diversity robustness. See RESULTS.md "Deployable recipe" + benched budget
+   ladders `tmp/budget{2000,4000}_4879.log`, tool `tmp/cascade_cost{,2}.py`.
 2. **Live-hint product:** a single AZ search on the current position (~0.2-2 s/
    move, drop MCTS). This is the *only* place a faster-strong net (the flywheel's
    real use) would matter — reaching a given hint quality at fewer sims/move.
