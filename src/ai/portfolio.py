@@ -36,7 +36,7 @@ CLI::
 
     # run every agent fresh on a held-out window, dump per-seed win-sets:
     python -m src.ai.portfolio --seed-offset 16 --seeds 32 \\
-        --nets src/ai/az.pt tmp/az_deep2_final_iter300.pt \\
+        --nets src/ai/az.pt src/ai/az_deep2.pt \\
         --az-sims 1000 --mcts-rngs 3 --json tmp/portfolio_16.json
 
     # recompute the analysis from a saved dump (no games replayed):
@@ -58,7 +58,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
-DEFAULT_NETS = ["src/ai/az.pt", "tmp/az_deep2_final_iter300.pt"]
+DEFAULT_NETS = ["src/ai/az.pt", "src/ai/az_deep2.pt"]
 
 
 @dataclass(frozen=True)
