@@ -124,36 +124,51 @@ teacher converges faster.
 `dc47854`+`0d3bbfc` portfolio 100%.
 
 ---
-## STOPPED (cut by user, 2026-07-19 00:0x) — NOT benchmarked yet
+## RESULT — flywheel benchmarked, verdict "just faster, not better" (2026-07-19)
 
-The maturation run was **cut at iter 200** before reaching the p_loss plateau
-(it was still falling ~0.02-0.03/session). Everything stopped, nothing running.
+The iter-200 net (cut before plateau) was extracted and benchmarked at **1000
+sims on BOTH held-out windows** — the cheap two-window robustness check instead of
+the 2-4h plateau run (user's call).
 
-- **Flywheel net frozen at iter 200, p_loss 1.541** — already *more mature than
-  az.pt* (1.65), but not converged. Checkpoint + win-buffer preserved:
-  `src/ai/az_flywheel_ckpt.pt` (+`.winbuf`), ready to resume or benchmark.
-- Gate `eval_win@1000` at iter 200 was 68.8% (selection seeds, noisy — NOT a verdict).
-- `az.pt` intact (`6b9ad21c50d175ebe266493696d0b121`).
+| net | 16-47 | 48-79 | total /64 | p_loss |
+|---|---|---|---|---|
+| **az.pt** (MCTS teacher) | 23/32 | 22/32 | **45/64** | 1.65 |
+| az_deep (MCTS teacher) | 21/32 | 22/32 | 43/64 | 1.505 |
+| **flywheel iter-200** (az.pt@4000 teacher) | **18/32** | **22/32** | **40/64** | **1.541** |
 
-**Two options tomorrow:**
-- **Benchmark now (partial verdict):** extract the net and bench at 1000 sims on
-  32 held-out seeds vs az.pt 23/32, az_deep 21/32:
-  ```
-  uv run --extra ai python - <<'PY'
-  import torch
-  ck=torch.load("src/ai/az_flywheel_ckpt.pt",map_location="cpu",weights_only=True)
-  torch.save({k:ck[k] for k in ("state_dict","obs_size","num_actions","hidden","value_dim")},
-             "tmp/az_flywheel_iter200.pt"); print("iter",ck["iteration"])
-  PY
-  uv run --extra ai python tmp/pbench.py --nets tmp/az_flywheel_iter200.pt \
-    --sims 1000 --seeds 32 --seed-offset 16 --workers 11
-  ```
-  Caveat: iter 200 is mature but not plateaued, so a ~21-23 result is not yet
-  proof of "just faster" (could still improve); a ≥29 result WOULD be meaningful.
-- **Resume to plateau first (cleaner verdict):** `bash tmp/orch_flywheel2.sh`
-  (it resumes from the checkpoint, matures to plateau, then benchmarks). ~2-4h.
+**Verdict: NOT better.** On 48-79 it ties the MCTS-teacher nets exactly
+(22=22=22); on 16-47 it is 5 below; aggregate 40/64 vs az.pt's 45/64 — same
+~50-72% band, côté bas. And it got there *already more mature than az.pt*
+(p_loss 1.541 < 1.65) — the identical "maturity does not convert" signature as
+az_deep. The strong teacher bought **faster convergence** (p_loss 1.951 @iter100
+vs az_deep's 2.13), **not a higher ceiling**. 10th lever, same wall.
 
-Interpretation rule unchanged: **≥~29/32 = genuinely better; ~21-23/32 = just
-faster** (same asymptote as MCTS-teacher nets). Verify on window 48-79
-(`--seed-offset 48`) before believing any gain. Judge the *final/extracted* net,
-not the gate pick `src/ai/az_flywheel.pt`.
+**Decision: closed the lever, did NOT run the 2-4h plateau** — two-window
+robustness + the maturity precedent make crossing 45/64 very unlikely. Documented
+in CLAUDE.md (new box after "No budget-resistant core") + RESULTS.md (ten-levers
+para). Committed. `az.pt` intact (`6b9ad21c50d175ebe266493696d0b121`).
+
+Artifacts kept: `tmp/az_flywheel_iter200.pt` (the 40/64 net),
+`src/ai/az_flywheel_ckpt.pt(.winbuf)` (iter-200 ckpt, resumable if ever
+revisited), `src/ai/az_flywheel.pt` (gate pick — do not trust over the final).
+Bench logs: `tmp/flywheel_bench_iter200.log`, `tmp/flywheel_bench_iter200_w2.log`.
+
+## Where the project stands / next directions
+
+The core research thread is **closed**: ten single-agent levers all plateau at
+the MCTS-teacher's ~50% *at fixed ≤1000-sim budget*, and the "ceiling" was shown
+to be a **budget artifact** — a single `az.pt` reaches ~84-100% by search-budget
+escalation, and guaranteed 100% is deployable via either cascade route
+(budget-escalation on one net, or the agent-diversity portfolio). Nothing about
+the game is unsolved.
+
+Open threads, in rough priority (none urgent):
+1. **Cost question:** which guaranteed-100% cascade is compute-cheaper per solved
+   seed — budget-escalate one net (1000→…→16000) vs the portfolio (2 AZ + 3 MCTS
+   RNGs at fixed budget). Measurable with existing tooling (`portfolio.py`,
+   `pbench.py`, `probe16k.py`).
+2. **Live-hint product:** a single AZ search on the current position (~0.2-2 s/
+   move, drop MCTS). This is the *only* place a faster-strong net (the flywheel's
+   real use) would matter — reaching a given hint quality at fewer sims/move.
+3. Housekeeping: `tmp/` has many one-off scripts + snapshots; could prune to the
+   ones RESULTS.md/CLAUDE.md reference.

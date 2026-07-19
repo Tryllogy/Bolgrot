@@ -61,13 +61,25 @@ set rather than eliminating it.** So a single agent is a ~84–100% solver
 diversity (the portfolio). This is the autosolver/offline budget (8000 sims ≈
 12 s/move), not the live-hint budget.
 
-Nine levers were tried to push a single agent past the ~50% band *at fixed
+Ten levers were tried to push a single agent past the ~50% band *at fixed
 (≤1000-sim) budget* — reward-ranking
 variants (winloss / blend / twohead), a larger `REWARD_WIN`, a persistent
 win-buffer (+ cross-session carry), a multi-seed MCTS teacher, double network
-width (h128), and deeper (1000-sim) self-play. **All plateau at ~50%.** Each
-change won about as many seeds as it lost; the teacher is MCTS at ~50%, and no
-amount of better-retained / better-covered MCTS data crosses it.
+width (h128), deeper (1000-sim) self-play, and a **stronger-teacher flywheel**
+(bootstrap from `az.pt`@4000 = 88% instead of MCTS@300 = 44%). **All plateau at
+~50%.** Each change won about as many seeds as it lost; the teacher is MCTS at
+~50%, and no amount of better-retained / better-covered MCTS data crosses it.
+
+The flywheel is the one lever that tried a teacher *stronger* than MCTS, so it
+was the best hope of raising the asymptote — and it did not. Its 64-net matured
+faster (`p_loss` 1.951 at iter 100 vs the MCTS-teacher `az_deep`'s 2.13) but
+landed in the same band: at 1000 sims on the two held-out windows it scored
+**18/32 + 22/32 = 40/64**, below `az.pt`'s **45/64** and level with `az_deep`'s
+43/64 — despite already being *more* mature than `az.pt` (`p_loss` 1.541 < 1.65),
+the same "maturity does not convert" signature. So a stronger teacher buys
+*faster convergence, not a higher ceiling*: the flywheel's only real use is
+reaching a given quality at fewer sims/move (lower live-hint latency), not
+raising the offline solver's win rate (already 100% via budget escalation).
 
 ## The reframing: reliability, not strength
 
