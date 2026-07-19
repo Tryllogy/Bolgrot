@@ -141,21 +141,21 @@ Everything is in `src/ai/portfolio.py` (parallel, one game per core):
 # run the full portfolio fresh on a held-out window, save per-seed win-sets:
 uv run --extra ai python -m src.ai.portfolio \
     --seed-offset 16 --seeds 32 \
-    --nets src/ai/az.pt tmp/az_deep2_final_iter300.pt \
-    --az-sims 1000 --mcts-rngs 3 --json tmp/portfolio_16.json
+    --nets src/ai/az.pt src/ai/az_deep2.pt \
+    --az-sims 1000 --mcts-rngs 3 --json tools/portfolio_16.json
 
 # recompute the analysis (union, cost, cost floor) from a saved dump, no games:
-uv run --extra ai python -m src.ai.portfolio --from-json tmp/portfolio_16.json
+uv run --extra ai python -m src.ai.portfolio --from-json tools/portfolio_16.json
 ```
 
-Saved win-sets from the runs above: `tmp/floor_winsets.json` (16–47, 5 RNGs),
-`tmp/floor2_winsets.json` (48–79, 5 RNGs).
+Saved win-sets from the runs above: `tools/floor_winsets.json` (16–47, 5 RNGs),
+`tools/floor2_winsets.json` (48–79, 5 RNGs).
 
 ## Deployable recipe
 
 - **Full-game autosolver — three deployable options, all reach ~100%:**
   - *One agent, fixed budget:* `az.pt`@8000 = ~84–100% (window-dependent,
-    ~12 s/move). Simplest; enough if ~90% suffices.
+    ~7 s/move measured). Simplest; enough if ~90% suffices.
   - *One agent, escalating budget (guaranteed 100%):* replay at 1000 → 2000 →
     4000 (→ 8000 → 16000), stop at the first win. No budget-resistant core exists,
     so every seed falls to enough sims; most win cheap, so mean cost is low. One
@@ -181,18 +181,27 @@ Saved win-sets from the runs above: `tmp/floor_winsets.json` (16–47, 5 RNGs),
     budget on one net** — same cost, one model, no MCTS, fewer moving parts. The
     portfolio only earns its extra parts (2 nets + MCTS RNGs) if you want
     agent-diversity robustness against a seed that resists budget on one net.
-    (Tool: `tmp/cascade_cost.py` / `cascade_cost2.py` over the saved win-sets.)
+    (Tool: `tools/cascade_cost.py` / `cascade_cost2.py` over the saved win-sets.)
 - **Live "best move here" hint** (chess.com-style): a *single* AlphaZero search on
   the current position — **not** the cascade (a whole-game solver), and **not**
-  MCTS (the slow member; AZ ties or beats it at equal budget). Latency scales with
-  sims/move, so the live budget sits lower on the curve than 8000 — a faster net
-  (the flywheel's only remaining use) would buy a higher hint quality per second.
+  MCTS (the slow member; AZ ties or beats it at equal budget). Measured per-move
+  latency (one search, `tools/permove.py`): **~0.9 s @1000 sims** (~72%
+  single-game quality), 7.3 s @8000, 14.8 s @16000 — cost ~linear in sims. So the
+  live budget sits near 1000 (sub-second), far below the 8000 offline solver.
+  Note a live single search can never guarantee 100% (that needs retries — the
+  cascade); like chess.com, it is a strong assistant, not a win guarantee. A
+  faster-strong net (the flywheel's only remaining use) would buy higher hint
+  quality per second.
 
 ## Artifacts
 
 - `src/ai/az.pt` — the canonical best single net (64-wide, ~50% @300, ~72% @1000).
   **Never overwrite it.**
-- `tmp/az_deep2_final_iter300.pt` — the second strong net (deep 1000-sim training),
+- `src/ai/az_deep2.pt` — the second strong net (deep 1000-sim training),
   wins seeds `az.pt` cannot; the portfolio's other AZ member.
 - `src/ai/mcts.py`, `src/ai/alphazero.py` — the two search agents.
 - `src/ai/portfolio.py` — the cascade + coverage/cost-floor tool (this analysis).
+- `tools/` — reusable analysis scripts kept out of the (deleted) `tmp/` scratch:
+  `pbench.py` (parallel held-out benchmark), `probe16k.py` (targeted seed probe),
+  `permove.py` (per-move latency), `cascade_cost{,2}.py` (route cost model),
+  `floor{,2}_winsets.json` (measured per-seed win-sets, windows 16–47 / 48–79).
