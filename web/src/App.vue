@@ -25,6 +25,13 @@ const hover = ref(null); // case sous le curseur {x, y} ou null
 let cellSet = new Set(); // clés "x,y" des cases valides (pour le hover)
 const toast = ref(null); // texte éphémère (coup joué par l'IA)
 let toastTimer = null;
+const screen = ref("home"); // "home" | "play" | "editor"
+const basePlayer = ref(null); // [x, y] départ joueur (depuis /map)
+const baseBolgrot = ref(null); // [x, y] Bolgrot
+const editorSpawns = ref([]); // spawns posés dans l'éditeur [{x, y}]
+const customMode = ref(false); // partie perso (vagues dessinées par le joueur)
+const editorContext = ref("create"); // "create" = 1re vague | "next" = suivantes
+const editorWave = ref(1); // numéro de la vague en cours de placement
 
 function fitBoard() {
   cellSet = new Set();
@@ -74,10 +81,29 @@ function drawTile(ctx, x, y, color_fill, color_stroke) {
 }
 
 function render() {
+  if (!canvas_ref.value) return; // rien à dessiner sur l'accueil
   const ctx = canvas_ref.value.getContext("2d");
   ctx.clearRect(0, 0, canvas_ref.value.width, canvas_ref.value.height);
-  const s = view.value;
   cells.value.cells.forEach(({ x, y }) => drawTile(ctx, x, y, "#3a4a5a", "#1a2530"));
+
+  if (screen.value === "editor") {
+    const g = view.value; // présent quand on place une vague EN COURS de partie
+    if (g) g.flames.forEach((f) => drawDot(ctx, f.x, f.y, "#ff6600", FLAME_R));
+    if (hover.value) {
+      drawTile(ctx, hover.value.x, hover.value.y, "#ffffff26", "#ffffffaa");
+    }
+    editorSpawns.value.forEach((f) => drawTile(ctx, f.x, f.y, "#950bbfe4", "#1a2530"));
+    const bx = g ? g.bolgrot.x : baseBolgrot.value[0];
+    const by = g ? g.bolgrot.y : baseBolgrot.value[1];
+    const px = g ? g.player.x : basePlayer.value[0];
+    const py = g ? g.player.y : basePlayer.value[1];
+    drawDot(ctx, bx, by, "#cc0000", UNIT_R);
+    drawDot(ctx, px, py, "#3399ff", UNIT_R);
+    return;
+  }
+
+  const s = view.value;
+  if (!s) return;
   s.next_spawn.forEach((sp) => drawTile(ctx, sp[0], sp[1], "#950bbfe4", "#1a2530"));
   if (hover.value) {
     drawTile(ctx, hover.value.x, hover.value.y, "#ffffff26", "#ffffffaa");
@@ -130,12 +156,32 @@ function pixelToCell(event) {
 
 function onCanvasClick(event) {
   const { x, y } = pixelToCell(event);
+  if (screen.value === "editor") {
+    editorToggle(x, y);
+    return;
+  }
   const p = view.value.player;
   const action = legal.value.actions.find(
     (a) => a.spell === selectedSpell.value && p.x + a.dx === x && p.y + a.dy === y
   );
   if (!action) return;
   playAction(action.index)
+}
+
+function editorToggle(x, y) {
+  if (!cellSet.has(`${x},${y}`)) return; // hors map
+  const g = view.value; // partie en cours (placement d'une vague suivante)
+  const occupied = g
+    ? (x === g.player.x && y === g.player.y) ||
+      (x === g.bolgrot.x && y === g.bolgrot.y) ||
+      g.flames.some((f) => f.x === x && f.y === y)
+    : (x === basePlayer.value[0] && y === basePlayer.value[1]) ||
+      (x === baseBolgrot.value[0] && y === baseBolgrot.value[1]);
+  if (occupied) return; // case déjà prise (joueur / Bolgrot / flamme)
+  const i = editorSpawns.value.findIndex((f) => f.x === x && f.y === y);
+  if (i >= 0) editorSpawns.value.splice(i, 1);
+  else if (editorSpawns.value.length < 6) editorSpawns.value.push({ x, y });
+  render();
 }
 
 function onCanvasMove(event) {
@@ -167,20 +213,114 @@ async function playAction(index) {
   await fetchLegal();
   render();
   if (data.done) console.log(data.state.won ? "GAGNE" : "PERDU");
+  // Partie perso : apres une fin de tour, le joueur dessine la vague suivante.
+  if (
+    customMode.value &&
+    index === 16 &&
+    !view.value.done &&
+    view.value.waves.spawned < view.value.waves.total
+  ) {
+    openNextWaveEditor();
+  }
 } 
+
+function applyGame(data) {
+  state.value = data;
+  view.value = data.state;
+  selectedSpell.value = null;
+  hint.value = null;
+  autoplay.value = false;
+}
 
 async function startGame(seed = null) {
   if (seed === null) seed = Math.floor(Math.random() * 1e9);
   currentSeed.value = seed;
+  customMode.value = false;
   const game = await fetch(`http://127.0.0.1:8000/games?seed=${seed}`, { method: "POST" });
-  const game_data = await game.json();
-  state.value = game_data;
-  view.value = game_data.state;
-  selectedSpell.value = null;
-  hint.value = null;
-  autoplay.value = false;
+  applyGame(await game.json());
   await fetchLegal();
   render();
+}
+
+async function startCustomGame(spawns) {
+  customMode.value = true;
+  const r = await fetch("http://127.0.0.1:8000/games/custom", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ spawns: spawns.map((f) => [f.x, f.y]) }),
+  });
+  applyGame(await r.json());
+  await fetchLegal();
+  render();
+}
+
+// --- Navigation entre écrans ---
+async function startRandom() {
+  screen.value = "play";
+  await nextTick();
+  await startGame();
+}
+
+async function openEditor() {
+  view.value = null; // éditeur "création" : plateau vierge, positions de base
+  customMode.value = false;
+  editorContext.value = "create";
+  editorWave.value = 1;
+  editorSpawns.value = [];
+  hover.value = null;
+  screen.value = "editor";
+  await nextTick();
+  render();
+}
+
+function clearEditor() {
+  editorSpawns.value = [];
+  render();
+}
+
+async function playCustom() {
+  if (editorSpawns.value.length === 0) return;
+  screen.value = "play";
+  await nextTick();
+  await startCustomGame(editorSpawns.value);
+}
+
+// Entre deux tours d'une partie perso : le joueur dessine la vague suivante.
+function openNextWaveEditor() {
+  editorContext.value = "next";
+  editorWave.value = view.value.waves.spawned + 1;
+  editorSpawns.value = [];
+  hover.value = null;
+  screen.value = "editor";
+  render();
+}
+
+async function submitSpawn() {
+  if (editorSpawns.value.length === 0) return;
+  const r = await fetch(
+    `http://127.0.0.1:8000/games/${state.value.game_id}/spawn`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tiles: editorSpawns.value.map((f) => [f.x, f.y]) }),
+    }
+  );
+  view.value = (await r.json()).state;
+  screen.value = "play";
+  await nextTick();
+  await fetchLegal();
+  render();
+  if (autoplay.value) await runAutoplay(); // reprise de l'IA (hybride perso)
+}
+
+function goHome() {
+  autoplay.value = false;
+  screen.value = "home";
+}
+
+async function newGame() {
+  if (customMode.value) await openEditor();
+  else await startGame();
 }
 
 async function askHint() {
@@ -195,9 +335,11 @@ async function askHint() {
   render();
 }
 
-async function toggleAutoplay() {
-  autoplay.value = !autoplay.value;
-  while (autoplay.value && !view.value.done) {
+// Joue tant qu'on est en partie (screen "play"). En partie perso, playAction
+// bascule sur l'éditeur à la fin d'un tour : la boucle s'arrête alors SANS
+// éteindre autoplay, et submitSpawn la relance après la pose de la vague.
+async function runAutoplay() {
+  while (autoplay.value && !view.value.done && screen.value === "play") {
     const r = await fetch(
       `http://127.0.0.1:8000/games/${state.value.game_id}/hint?sims=${sims.value}`,
       { method: "POST" }
@@ -207,7 +349,12 @@ async function toggleAutoplay() {
     await playAction(h.index);
     await new Promise((res) => setTimeout(res, 300));
   }
-  autoplay.value = false;
+  if (view.value?.done) autoplay.value = false;
+}
+
+async function toggleAutoplay() {
+  autoplay.value = !autoplay.value;
+  if (autoplay.value) await runAutoplay();
 }
 
 async function solveOnce(budget) {
@@ -238,26 +385,72 @@ async function solveLevel() {
 
 onMounted(async () => {
   const map = await fetch("http://127.0.0.1:8000/map");
-  cells.value = await map.json();
+  const md = await map.json();
+  cells.value = md;
+  basePlayer.value = md.player;
+  baseBolgrot.value = md.bolgrot;
   fitBoard();
-  await nextTick();
-  await startGame(currentSeed.value);
+  // On reste sur l'accueil ; la partie démarre au choix de l'utilisateur.
 });
 </script>
 
 <template>
   <div class="wrap">
-    <h1>Bolgrot</h1>
-    <p class="disclaimer">
-      L'IA est un assistant très fort, mais la victoire n'est pas garantie à
-      chaque partie. Sur un coup donné elle propose le meilleur coup connu ; sur
-      un niveau perdu, "Réessayer plus fort" relance l'IA avec plus de
-      réflexion (elle finit par gagner en cherchant plus profond). Attention :
-      augmenter les sims augmente le temps de calcul de chaque coup.
-      (~1s/1000)
-    </p>
+    <!-- ACCUEIL -->
+    <section v-if="screen === 'home'" class="home">
+      <h1>Bolgrot</h1>
+      <p class="lead">
+        Un jeu de survie tour par tour : téléportez-vous pour éteindre les
+        flammes sans qu'aucune ne vous touche. Une IA entraînée peut vous
+        souffler le meilleur coup, ou jouer la partie à votre place.
+      </p>
+      <div class="home-actions">
+        <button class="primary big" @click="startRandom">
+          S'entraîner (partie aléatoire)
+        </button>
+        <button class="big" @click="openEditor">
+          Créer ma partie (dessiner les 6 vagues)
+        </button>
+      </div>
+      <p class="disclaimer">
+        L'IA est un assistant très fort, mais la victoire n'est pas garantie à
+        chaque partie. Sur un niveau perdu, « Réessayer plus fort » la relance
+        avec plus de réflexion (elle finit par gagner en cherchant plus
+        profond). Attention : augmenter les sims augmente le temps de calcul
+        (~1 s / 1000 sims).
+      </p>
+    </section>
 
-    <div v-if="view" class="hud">
+    <!-- JEU / ÉDITEUR -->
+    <template v-else>
+      <div class="topbar">
+        <button class="ghost" @click="goHome">← Accueil</button>
+        <span class="title-sm">Bolgrot</span>
+        <span class="topbar-spacer"></span>
+      </div>
+
+      <div v-if="screen === 'editor'" class="editor-bar">
+        <span>
+          <strong>Vague {{ editorWave }}/6</strong> — cliquez pour poser /
+          retirer un point de spawn (violet) —
+          <strong>{{ editorSpawns.length }}/6</strong>
+        </span>
+        <button :disabled="!editorSpawns.length" @click="clearEditor">
+          Effacer
+        </button>
+        <button
+          class="primary"
+          :disabled="!editorSpawns.length"
+          @click="editorContext === 'create' ? playCustom() : submitSpawn()">
+          {{ editorContext === 'create' ? 'Jouer' : 'Valider la vague' }}
+        </button>
+        <span v-if="autoplay" class="ai-note">
+          L'IA reprendra après validation
+          <button class="ghost" @click="autoplay = false">Arrêter l'IA</button>
+        </span>
+      </div>
+
+    <div v-if="screen === 'play' && view" class="hud">
       <div class="stat">
         <span class="stat-label">PV</span>
         <span class="stat-value hp">{{ view.player.hp }}</span>
@@ -276,7 +469,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-if="view && !view.done" class="controls">
+    <div v-if="screen === 'play' && view && !view.done" class="controls">
       <div class="spells">
         <div class="spell-slot" v-for="(sp, i) in view.spells" :key="i">
           <button
@@ -325,18 +518,21 @@ onMounted(async () => {
         :width="canvasW"
         :height="canvasH"></canvas>
       <Transition name="fade">
-        <div v-if="toast" class="toast">{{ toast }}</div>
+        <div v-if="toast && screen === 'play'" class="toast">{{ toast }}</div>
       </Transition>
-      <div v-if="view && view.done" class="overlay">
+      <div v-if="screen === 'play' && view && view.done" class="overlay">
         <div class="modal">
           <h2>{{ view.won ? "Victoire !" : "Défaite" }}</h2>
-          <button class="primary" @click="startGame()">Nouvelle partie</button>
-          <button v-if="!view.won" @click="solveLevel" :disabled="solving">
+          <button class="primary" @click="newGame()">
+            {{ customMode ? "Nouvelle partie perso" : "Nouvelle partie" }}
+          </button>
+          <button v-if="!view.won && !customMode" @click="solveLevel" :disabled="solving">
             {{ solving ? `L'IA cherche à ${solveBudget} sims…` : "Réessayer plus fort" }}
           </button>
         </div>
       </div>
     </div>
+    </template>
   </div>
 </template>
 
@@ -360,6 +556,76 @@ onMounted(async () => {
   line-height: 1.6;
   max-width: 560px;
   margin: 0 auto 36px;
+}
+
+/* Accueil ------------------------------------------------------------------ */
+.home {
+  padding-top: 24px;
+}
+.lead {
+  color: var(--text);
+  font-size: 1.05rem;
+  line-height: 1.6;
+  max-width: 560px;
+  margin: 0 auto 32px;
+}
+.home-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+  margin-bottom: 40px;
+}
+.big {
+  padding: 14px 22px;
+  font-size: 15px;
+}
+
+/* Barre supérieure (jeu / éditeur) ----------------------------------------- */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.title-sm {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-strong);
+}
+.topbar-spacer {
+  flex: 1;
+}
+.ghost {
+  background: transparent;
+  border-color: transparent;
+}
+.ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+
+/* Barre de l'éditeur ------------------------------------------------------- */
+.editor-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 24px;
+  font-size: 14px;
+  color: var(--text);
+}
+.editor-bar strong {
+  color: var(--text-strong);
+}
+.ai-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--accent);
 }
 
 /* HUD ---------------------------------------------------------------------- */
