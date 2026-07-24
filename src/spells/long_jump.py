@@ -29,17 +29,17 @@ class LongJump(Spells):
             name, description, cost, max_use,
             effects, type_spell, bfs, line_of_sight, sprite)
         self.effects: list[str] = [
-            "Teleport to the tile",
-            "Attract 1 tile",
-            "-1 Vit"
+            "Se téléporte sur la case",
+            "Attire les ennemis d'1 case",
+            "-1 PV"
         ]
-        self.description: str = "Teleport to the tile." \
-            "Lose 1 HP." \
-            "Can be use on an occupied tile to kill ennemy." \
-            "If an ennemy is killed, restore 1 HP." \
-            "All ennemies are attracted towards the caster" \
-            " after the teleportation." \
-            "If an ennemy can't be moved, you die."
+        self.description: str = "Se téléporte sur la case." \
+            "Perd 1 PV." \
+            "Peut cibler une case occupée pour tuer l'ennemi." \
+            "Si un ennemi est tué, récupère 1 PV." \
+            "Tous les ennemis sont attirés vers le lanceur" \
+            " après la téléportation." \
+            "Si un ennemi ne peut pas être déplacé, vous mourez."
         self.time_used: int = 0
         self.type_spell: list[tuple[TypeSpell, int]] = [
             (TypeSpell.LINE, 2)

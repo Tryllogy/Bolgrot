@@ -80,7 +80,10 @@ def view(game: Game) -> dict:
             "name": s.name,
             "cost": s.cost,
             "castable": s.is_castable(game.player),
-            "uses_left": s.max_use - s.time_used
+            "uses_left": s.max_use - s.time_used,
+            "sprite": s.sprite,
+            "description": s.description,
+            "effects": s.effects
         } for s in game.player.spells],
         "waves": {
             "spawned": game.waves_spawned,

@@ -75,6 +75,10 @@ function selectSpell(i) {
   render();
 }
 
+function descLines(desc) {
+  return desc.split(".").map((s) => s.trim()).filter(Boolean);
+}
+
 function onCanvasClick(event) {
   const canvas = canvas_ref.value;
   const rect = canvas.getBoundingClientRect();
@@ -179,56 +183,269 @@ onMounted(async () => {
 </script>
 
 <template>
-  <h1>Bolgrot</h1>
-  <p class="disclaimer">
-    L'IA est un assistant tres fort, mais la victoire n'est pas garantie
-    chaque partie. Sur un coup donne elle propose le meilleur coup connu ; sur un
-    niveau perdu, "Reessayer plus fort" relance l'IA avec plus de reflexion
-    (elle finit par gagner en cherchant plus profond).
-    Attention cependant, augmenter les sims augmente le temps necessaire pour que
-    l'IA trouve le meilleur coup.
-  </p>
-  <div v-if="view">
-    HP: {{ view.player.hp }} | PA: {{ view.player.pa }} | Vague:
-    {{ view.waves.spawned }}/{{ view.waves.total }} | Flammes: {{ view.flames.length }}
+  <div class="wrap">
+    <h1>Bolgrot</h1>
+    <p class="disclaimer">
+      L'IA est un assistant très fort, mais la victoire n'est pas garantie à
+      chaque partie. Sur un coup donné elle propose le meilleur coup connu ; sur
+      un niveau perdu, « Réessayer plus fort » relance l'IA avec plus de
+      réflexion (elle finit par gagner en cherchant plus profond). Attention :
+      augmenter les sims augmente le temps de calcul de chaque coup.
+    </p>
+
+    <div v-if="view" class="hud">
+      <span class="chip">❤️ {{ view.player.hp }} HP</span>
+      <span class="chip">⭐ {{ view.player.pa }} PA</span>
+      <span class="chip">Vague {{ view.waves.spawned }}/{{ view.waves.total }}</span>
+      <span class="chip">{{ view.flames.length }} flammes</span>
+    </div>
+
+    <div v-if="view && !view.done" class="controls">
+      <div class="spells">
+        <div class="spell-slot" v-for="(sp, i) in view.spells" :key="i">
+          <button
+            class="spell"
+            :class="{ active: selectedSpell === i }"
+            :disabled="!sp.castable"
+            @click="selectSpell(i)">
+            <img :src="`/sprites/${sp.sprite}`" :alt="sp.name" />
+            <span>{{ sp.name }}</span>
+          </button>
+          <span class="tooltip">
+            <strong>{{ sp.name }}</strong>
+            <span class="tt-cost">
+              Coût : {{ sp.cost }} PA<template v-if="sp.uses_left < 90"> · {{ sp.uses_left }} usage(s)</template>
+            </span>
+            <span v-for="line in descLines(sp.description)" :key="line" class="tt-line">{{ line }}.</span>
+            <span v-if="sp.effects.length" class="tt-effects">{{ sp.effects.join(" · ") }}</span>
+          </span>
+        </div>
+      </div>
+      <div class="actions">
+        <button @click="playAction(16)">Fin de tour</button>
+        <label class="budget">
+          Budget IA
+          <select v-model.number="sims">
+            <option :value="300">Rapide (300)</option>
+            <option :value="1000">Normal (1000)</option>
+            <option :value="8000">Fort (8000)</option>
+          </select>
+        </label>
+        <button class="primary" @click="askHint" :disabled="hintLoading || autoplay">
+          {{ hintLoading ? "Réflexion…" : "Indice" }}
+        </button>
+        <button @click="toggleAutoplay">
+          {{ autoplay ? "⏹ Stop" : "▶ Autoplay" }}
+        </button>
+      </div>
+    </div>
+
+    <div class="board">
+      <canvas @click="onCanvasClick" ref="canvas_ref" width="760" height="600"></canvas>
+      <div v-if="view && view.done" class="overlay">
+        <div class="modal">
+          <h2>{{ view.won ? "Victoire !" : "Défaite" }}</h2>
+          <button class="primary" @click="startGame()">Nouvelle partie</button>
+          <button v-if="!view.won" @click="solveLevel" :disabled="solving">
+            {{ solving ? `L'IA cherche à ${solveBudget} sims…` : "Réessayer plus fort" }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
-  <div v-if="view">
-    <button
-      v-for="(sp, i) in view.spells"
-      :key="i"
-      :disabled="!sp.castable"
-      @click="selectSpell(i)">
-      {{ sp.name }}
-    </button>
-  </div>
-  <div>
-    <button v-if="view && !view.done" @click="playAction(16)">
-      Fin de tour
-    </button>
-  </div>
-  <div v-if="view && !view.done">
-    <select v-model.number="sims">
-      <option :value="300">Rapide (300)</option>
-      <option :value="1000">Normal (1000)</option>
-      <option :value="8000">Fort (8000)</option>
-    </select>
-    <button @click="askHint" :disabled="hintLoading || autoplay">
-      {{ hintLoading ? "Reflexion" : "Indice" }}
-    </button>
-    <button @click="toggleAutoplay">
-      {{ autoplay ? "⏹ Stop" : "▶ Autoplay" }}
-    </button>
-  </div>
-  <div v-if="view && view.done">
-    <h2>{{ view.won ? "Vous avez gagne !" : "Vous avez perdu" }}</h2>
-    <button @click="startGame()">Nouvelle partie</button>
-    <button v-if="!view.won" @click="solveLevel" :disabled="solving">
-      {{ solving ? `L'IA cherche a ${solveBudget} sims` : "Reessayer plus fort (IA)" }}
-    </button>
-  </div>
-  <canvas @click="onCanvasClick" ref="canvas_ref" width="760" height="600"></canvas>
 </template>
 
-<style>
-  .disclaimer { color: #888; font-size: 0.85rem; max-width: 640px; }
+<style scoped>
+.wrap {
+  max-width: 840px;
+  margin: 0 auto;
+  padding: 0 16px 48px;
+}
+.disclaimer {
+  color: var(--text);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  max-width: 640px;
+  margin: 0 auto 20px;
+}
+.hud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+.chip {
+  background: var(--accent-bg);
+  color: var(--text-h);
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 14px;
+}
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 18px;
+}
+.spells {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.spell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 96px;
+  padding: 8px;
+  font-size: 12px;
+  line-height: 1.2;
+  background: var(--code-bg);
+  color: var(--text-h);
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+.spell img {
+  width: 40px;
+  height: 40px;
+  image-rendering: pixelated;
+}
+.spell:hover:not(:disabled) {
+  border-color: var(--accent-border);
+}
+.spell.active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.spell:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.spell-slot {
+  position: relative;
+}
+.tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 230px;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  padding: 10px 12px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  line-height: 1.35;
+  z-index: 10;
+  pointer-events: none;
+}
+.spell-slot:hover .tooltip {
+  display: flex;
+}
+.tooltip strong {
+  color: var(--text-h);
+  font-size: 13px;
+}
+.tt-cost {
+  color: var(--accent);
+}
+.tt-effects {
+  color: var(--text-h);
+  font-style: italic;
+}
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+}
+.budget {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--text);
+}
+button {
+  font: inherit;
+  font-size: 15px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--code-bg);
+  color: var(--text-h);
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+button.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+select {
+  font: inherit;
+  font-size: 14px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--code-bg);
+  color: var(--text-h);
+}
+.board {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+canvas {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #10141a;
+  box-shadow: var(--shadow);
+}
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 12px;
+}
+.modal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  padding: 24px 28px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  line-height: 1.4;
+}
 </style>

@@ -28,9 +28,9 @@ class MoveFlames(Spells):
         super().__init__(
             name, description, cost, max_use,
             effects, type_spell, bfs, line_of_sight, sprite)
-        self.description: str = "Ennemies are attracted on the tile." \
-            "Caster lose 5 HP." \
-            "Ennemies can't kill the caster when using this spell."
+        self.description: str = "Les ennemis sont attirés sur la case." \
+            "Le lanceur perd 5 PV." \
+            "Les ennemis ne peuvent pas tuer le lanceur avec ce sort."
         self.time_used: int = 0
         self.type_spell: list[tuple[TypeSpell, int]] = [
             (TypeSpell.DIAGONAL, 1)

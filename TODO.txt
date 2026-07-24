@@ -79,13 +79,18 @@ PHASE 4 — INTÉGRER L'IA  (le hint)
 --------------------------------------------------------------------------------
 PHASE 5 — PRODUIT & POLISH
 --------------------------------------------------------------------------------
-[ ] 5.1  Disclaimer honnête ("bot très fort, victoire non garantie" — cf. le
-         cadrage chess.com : 100% seulement via retries/cascade, pas en 1 passe).
-[ ] 5.2  (option) "Réessayer plus fort" = escalade de budget (déterministe + pas
-         de noyau résistant -> converge vers la victoire). PIÈGE : retry au même
-         budget + même seed = même défaite ; il faut CHANGER le budget ou le seed.
-[ ] 5.3  Animations (flammes qui bougent), sprites (réutiliser src/sprites_png).
-[ ] 5.4  Responsive / thème.
+[x] 5.1  Disclaimer honnête affiché (assistant fort, victoire non garantie,
+         escalade pour finir). Bloc <p class="disclaimer">.
+[x] 5.2  "Réessayer plus fort" = solveur à escalade [1000,2000,4000,8000] sur le
+         MÊME seed (front possède le seed via ?seed=N). Fondement vérifié :
+         même seed=même board + IA déterministe à budget fixe -> escalade requise.
+[x] 5.3  Sprites de sorts sur les boutons (API expose s.sprite ; PNG dans
+         web/public/sprites/ ; <img> dans le bouton). Player/Bolgrot/flammes
+         restent des formes (pas d'assets pour eux). Animations flammes : reporté.
+[x] 5.4  Responsive + thème : HUD chips, contrôles stylés, canvas max-width:100%
+         (scale au clic gère le redimensionnement), overlay modal win/lose,
+         variables de thème du style.css (clair/sombre auto).
+         -> MILESTONE Phase 5 : produit poli ✅
 
 --------------------------------------------------------------------------------
 PHASE 6 — DÉPLOIEMENT
