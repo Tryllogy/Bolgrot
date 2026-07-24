@@ -32,10 +32,11 @@ But : jouer une partie ENTIÈRE via l'auto-doc FastAPI (/docs), sans aucun front
 [ ] 1.2  (option/plus tard) Modèles Pydantic en réponse. Les dicts marchent déjà ;
          Pydantic ajoutera validation + doc plus riche. Non-bloquant.
 [x] 1.3  Session : dict `GAMES: {game_id: Game}` en mémoire. (Multi-joueurs: ph.6)
-[x] 1.4  Endpoints faits : POST /games, GET /games/{id} (+404), POST /step.
-         RESTE : GET /games/{id}/legal (actions légales) -> avant la Phase 3.
+[x] 1.4  Endpoints faits : POST /games, GET /games/{id} (+404), POST /step,
+         GET /games/{id}/legal (masque décodé -> {index, spell, dx, dy}).
 [x] 1.5  MILESTONE : partie jouable via curl/docs (create->step 16->1ère vague OK).
-[ ] 1.6  Mapper ACTIONS -> libellés lisibles pour le front. -> avant la Phase 3.
+[x] 1.6  ACTIONS décodées côté /legal (index+spell+offset), le front n'a pas
+         besoin de connaître la table. Libellés texte : plus tard si besoin.
 
 --------------------------------------------------------------------------------
 PHASE 2 — FRONT : AFFICHER LE BOARD  (lecture seule)   ★ première image
@@ -52,28 +53,28 @@ PHASE 2 — FRONT : AFFICHER LE BOARD  (lecture seule)   ★ première image
 --------------------------------------------------------------------------------
 PHASE 3 — FRONT : INTERACTIVITÉ  (jouer des coups)
 --------------------------------------------------------------------------------
-[ ] 3.1  Sélection de sort (clic sur un sort / touches 1-2-3) -> demander la
-         previsu au backend -> surligner les tuiles atteignables.
-[ ] 3.2  Clic sur une tuile cible -> trouver l'action_index correspondant ->
-         POST /step -> re-render. Gérer le mapping (tuile cliquée -> (dx,dy) ->
-         index dans ACTIONS).
-[ ] 3.3  Bouton "Fin de tour" (action end-turn = dernier index).
-[ ] 3.4  Écrans win/lose. -> MILESTONE : jeu jouable au navigateur.
+[x] 3.1  Sélection de sort (boutons /legal) -> surlignage jaune des tuiles
+         atteignables (render() rappelable, canvas non-réactif -> render manuel).
+[x] 3.2  Clic tuile -> projection inverse pixel->case (+ correction scale CSS) ->
+         find action légale -> POST /step -> re-render.
+[x] 3.3  Bouton "Fin de tour" (action index 16).
+[x] 3.4  Overlay win/lose + "Nouvelle partie" (startGame réutilisable).
+         -> MILESTONE Phase 3 : jeu jouable au navigateur ✅
 
 --------------------------------------------------------------------------------
 PHASE 4 — INTÉGRER L'IA  (le hint)
 --------------------------------------------------------------------------------
-[ ] 4.1  Endpoint POST /games/{id}/hint?sims=1000 -> charge src/ai/az.pt une
-         seule fois (au démarrage, pas par requête !), lance az_action_fn ->
-         renvoie l'action suggérée + le libellé. Latence mesurée ~0.9s @1000.
-[ ] 4.2  Front : bouton "Indice" -> état de chargement (spinner ~1s) -> surligner
-         le coup suggéré sur le board.
-[ ] 4.3  PERF (important) : la recherche AZ est CPU-bound et BLOQUE. Pour du
-         multi-utilisateur, la sortir du thread web (run_in_executor / process
-         pool) sinon un hint fige tout le serveur. Je t'explique async vs CPU-bound.
-[ ] 4.4  (option) Toggle "Autoplay" : l'IA joue chaque coup en boucle.
-[ ] 4.5  (option) Sélecteur de budget (sims) exposant le compromis
-         qualité/latence (300=0.24s, 1000=0.9s, 8000=7s).
+[x] 4.1  POST /games/{id}/hint?sims=1000 -> az.pt chargé 1x, az_action_fn,
+         renvoie {index,spell,dx,dy} (décodé comme /legal). Mesuré ~0.9s @1000.
+[x] 4.2  Front : bouton "Indice" (spinner "Réflexion") -> case verte du coup
+         suggéré. hint remis à null après un coup / nouvelle partie.
+[x] 4.3  PERF : recherche sortie dans un ProcessPoolExecutor (4 workers, net
+         chargé par initializer), endpoint async + run_in_executor. Prouvé :
+         4 hints // = ~1x (au lieu de ~4x sous le GIL), boucle jamais bloquée.
+[x] 4.4  Toggle "Autoplay" : boucle hint->playAction (pause 300ms), stop propre.
+         Validé backend : bot GAGNE une partie complète (64 coups, 36 flammes, ~49s).
+[x] 4.5  Sélecteur de budget (sims 300/1000/8000) v-model.number -> askHint/autoplay.
+         -> MILESTONE Phase 4 : hint IA complet + autoplay ✅
 
 --------------------------------------------------------------------------------
 PHASE 5 — PRODUIT & POLISH

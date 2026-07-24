@@ -1,16 +1,56 @@
 import os
 os.environ["SDL_VIDEODRIVER"] = "dummy"
-from uuid import uuid4
-from fastapi import FastAPI, HTTPException
-from src import constant
-from src.entity.flame import Flame
-from src.entity.player import Player
+import asyncio
+from concurrent.futures import ProcessPoolExecutor
+from contextlib import asynccontextmanager
+from fastapi.middleware.cors import CORSMiddleware
 from src.game import Game
+from src.entity.player import Player
+from src.entity.flame import Flame
+from src import constant
+from fastapi import FastAPI, HTTPException
+from uuid import uuid4
 
 _ref_game = Game(Player(*constant.BASE_PLAYER_POS))
 MAP_CELLS = [{"x": c.x, "y": c.y} for c in _ref_game.map.cases.values()]
-app = FastAPI()
-from fastapi.middleware.cors import CORSMiddleware
+
+
+# --- AZ hint worker pool ----------------------------------------------------
+# The AZ search is CPU-bound pure-Python => the GIL serialises it. We run it in
+# separate processes (each has its own GIL / core) so concurrent hints don't
+# queue behind each other and the async event loop is never blocked.
+_WORKER_NET = None   # one net copy per worker process
+
+
+def _worker_init():
+    """Runs once when a worker process starts: load az.pt a single time."""
+    import os
+    os.environ["SDL_VIDEODRIVER"] = "dummy"
+    from src.ai.policy import load_policy
+    global _WORKER_NET
+    _WORKER_NET = load_policy("src/ai/az.pt")
+
+
+def _worker_hint(state_dict: dict, sims: int) -> int:
+    """Reconstruct the game from a picklable state and return the AZ best move."""
+    from src.ai.alphazero import az_action_fn
+    game = Game(Player(*constant.BASE_PLAYER_POS))
+    game.set_state(state_dict)
+    return az_action_fn(_WORKER_NET, simulations=sims)(game)
+
+
+_POOL: ProcessPoolExecutor | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _POOL
+    _POOL = ProcessPoolExecutor(max_workers=4, initializer=_worker_init)
+    yield
+    _POOL.shutdown()
+
+
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -85,3 +125,30 @@ def get_map() -> dict:
     return {
         "cells": MAP_CELLS
     }
+
+
+@app.get("/games/{game_id}/legal")
+def legal(game_id: str) -> dict:
+    if game_id not in GAMES:
+        raise HTTPException(status_code=404, detail="game not found")
+    game = GAMES[game_id]
+    mask = game.legal_actions()
+    actions = []
+    for i, ok in enumerate(mask):
+        if ok:
+            spell_index, (dx, dy) = Game.ACTIONS[i]
+            actions.append(
+                {"index": i, "spell": spell_index, "dx": dx, "dy": dy})
+    return {"actions": actions}
+
+
+@app.post("/games/{game_id}/hint")
+async def hint(game_id: str, sims: int = 1000) -> dict:
+    if game_id not in GAMES:
+        raise HTTPException(status_code=404, detail="game not found")
+    game = GAMES[game_id]
+    state_dict = game.get_state()
+    loop = asyncio.get_running_loop()
+    index = await loop.run_in_executor(_POOL, _worker_hint, state_dict, sims)
+    spell_index, (dx, dy) = Game.ACTIONS[index]
+    return {"index": index, "spell": spell_index, "dx": dx, "dy": dy}
