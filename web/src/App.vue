@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, onMounted, nextTick } from "vue";
 const state = ref(null);
 const cells = ref(null);
 const view = ref(null);
@@ -13,10 +13,32 @@ const autoplay = ref(false);
 const currentSeed = ref(null);
 const solving = ref(false);
 const solveBudget = ref(null);
-const W = 40,
-  H = 20,
-  OFFX = 380,
-  OFFY = 10;
+const W = 64,
+  H = 32;
+let OFFX = 0,
+  OFFY = 0;
+const canvasW = ref(760);
+const canvasH = ref(600);
+const FLAME_R = H * 0.38; // rayon des flammes, proportionnel à la tuile
+const UNIT_R = H * 0.48; // rayon joueur / Bolgrot
+const hover = ref(null); // case sous le curseur {x, y} ou null
+let cellSet = new Set(); // clés "x,y" des cases valides (pour le hover)
+
+function fitBoard() {
+  cellSet = new Set();
+  let dxmin = Infinity, dxmax = -Infinity, smin = Infinity, smax = -Infinity;
+  for (const { x, y } of cells.value.cells) {
+    cellSet.add(`${x},${y}`);
+    dxmin = Math.min(dxmin, x - y);
+    dxmax = Math.max(dxmax, x - y);
+    smin = Math.min(smin, x + y);
+    smax = Math.max(smax, x + y);
+  }
+  OFFX = -dxmin * (W / 2) + W;
+  OFFY = -smin * (H / 2) + H;
+  canvasW.value = (dxmax - dxmin) * (W / 2) + 2 * W;
+  canvasH.value = (smax - smin) * (H / 2) + 2 * H;
+}
 
 async function fetchLegal() {
   const r = await fetch(`http://127.0.0.1:8000/games/${state.value.game_id}/legal`);
@@ -55,9 +77,12 @@ function render() {
   const s = view.value;
   cells.value.cells.forEach(({ x, y }) => drawTile(ctx, x, y, "#3a4a5a", "#1a2530"));
   s.next_spawn.forEach((sp) => drawTile(ctx, sp[0], sp[1], "#950bbfe4", "#1a2530"));
-  s.flames.forEach((f) => drawDot(ctx, f.x, f.y, "#ff6600"));
-  drawDot(ctx, s.bolgrot.x, s.bolgrot.y, "#cc0000", 8);
-  drawDot(ctx, s.player.x, s.player.y, "#3399ff", 8);
+  if (hover.value) {
+    drawTile(ctx, hover.value.x, hover.value.y, "#ffffff26", "#ffffffaa");
+  }
+  s.flames.forEach((f) => drawDot(ctx, f.x, f.y, "#ff6600", FLAME_R));
+  drawDot(ctx, s.bolgrot.x, s.bolgrot.y, "#cc0000", UNIT_R);
+  drawDot(ctx, s.player.x, s.player.y, "#3399ff", UNIT_R);
   if (selectedSpell.value !== null && legal.value) {
     const p = view.value.player;
     legal.value.actions
@@ -79,7 +104,7 @@ function descLines(desc) {
   return desc.split(".").map((s) => s.trim()).filter(Boolean);
 }
 
-function onCanvasClick(event) {
+function pixelToCell(event) {
   const canvas = canvas_ref.value;
   const rect = canvas.getBoundingClientRect();
   const scaleX = canvas.width / rect.width;
@@ -87,14 +112,34 @@ function onCanvasClick(event) {
   const mx = (event.clientX - rect.left) * scaleX;
   const my = (event.clientY - rect.top) * scaleY;
   const u = mx - OFFX, v = my - OFFY;
-  const x = Math.round(u / W + v / H);
-  const y = Math.round(v / H - u / W);
+  return { x: Math.round(u / W + v / H), y: Math.round(v / H - u / W) };
+}
+
+function onCanvasClick(event) {
+  const { x, y } = pixelToCell(event);
   const p = view.value.player;
   const action = legal.value.actions.find(
     (a) => a.spell === selectedSpell.value && p.x + a.dx === x && p.y + a.dy === y
   );
   if (!action) return;
   playAction(action.index)
+}
+
+function onCanvasMove(event) {
+  const { x, y } = pixelToCell(event);
+  const on = cellSet.has(`${x},${y}`) ? { x, y } : null;
+  const changed = (on?.x !== hover.value?.x) || (on?.y !== hover.value?.y);
+  if (changed) {
+    hover.value = on;
+    render();
+  }
+}
+
+function onCanvasLeave() {
+  if (hover.value) {
+    hover.value = null;
+    render();
+  }
 }
 
 async function playAction(index) {
@@ -178,6 +223,8 @@ async function solveLevel() {
 onMounted(async () => {
   const map = await fetch("http://127.0.0.1:8000/map");
   cells.value = await map.json();
+  fitBoard();
+  await nextTick();
   await startGame(currentSeed.value);
 });
 </script>
@@ -188,16 +235,29 @@ onMounted(async () => {
     <p class="disclaimer">
       L'IA est un assistant très fort, mais la victoire n'est pas garantie à
       chaque partie. Sur un coup donné elle propose le meilleur coup connu ; sur
-      un niveau perdu, « Réessayer plus fort » relance l'IA avec plus de
+      un niveau perdu, "Réessayer plus fort" relance l'IA avec plus de
       réflexion (elle finit par gagner en cherchant plus profond). Attention :
       augmenter les sims augmente le temps de calcul de chaque coup.
+      (~1s/1000)
     </p>
 
     <div v-if="view" class="hud">
-      <span class="chip">❤️ {{ view.player.hp }} HP</span>
-      <span class="chip">⭐ {{ view.player.pa }} PA</span>
-      <span class="chip">Vague {{ view.waves.spawned }}/{{ view.waves.total }}</span>
-      <span class="chip">{{ view.flames.length }} flammes</span>
+      <div class="stat">
+        <span class="stat-label">PV</span>
+        <span class="stat-value">{{ view.player.hp }}</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">PA</span>
+        <span class="stat-value">{{ view.player.pa }}</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Vague</span>
+        <span class="stat-value">{{ view.waves.spawned }}/{{ view.waves.total }}</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Flammes</span>
+        <span class="stat-value">{{ view.flames.length }}</span>
+      </div>
     </div>
 
     <div v-if="view && !view.done" class="controls">
@@ -241,7 +301,13 @@ onMounted(async () => {
     </div>
 
     <div class="board">
-      <canvas @click="onCanvasClick" ref="canvas_ref" width="760" height="600"></canvas>
+      <canvas
+        @click="onCanvasClick"
+        @mousemove="onCanvasMove"
+        @mouseleave="onCanvasLeave"
+        ref="canvas_ref"
+        :width="canvasW"
+        :height="canvasH"></canvas>
       <div v-if="view && view.done" class="overlay">
         <div class="modal">
           <h2>{{ view.won ? "Victoire !" : "Défaite" }}</h2>
@@ -257,38 +323,66 @@ onMounted(async () => {
 
 <style scoped>
 .wrap {
-  max-width: 840px;
+  max-width: 1000px;
   margin: 0 auto;
-  padding: 0 16px 48px;
+  padding: 56px 24px 72px;
+  text-align: center;
+}
+.wrap :deep(h1) {
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text-strong);
+  margin: 0 0 12px;
 }
 .disclaimer {
   color: var(--text);
-  font-size: 0.85rem;
-  line-height: 1.5;
-  max-width: 640px;
-  margin: 0 auto 20px;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  max-width: 560px;
+  margin: 0 auto 36px;
 }
+
+/* HUD ---------------------------------------------------------------------- */
 .hud {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   justify-content: center;
-  margin-bottom: 16px;
+  margin-bottom: 28px;
 }
-.chip {
-  background: var(--accent-bg);
-  color: var(--text-h);
-  border: 1px solid var(--accent-border);
-  border-radius: 999px;
-  padding: 4px 12px;
-  font-size: 14px;
+.stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 78px;
+  padding: 10px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
+.stat-label {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text);
+}
+.stat-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Controls ----------------------------------------------------------------- */
 .controls {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
   align-items: center;
-  margin-bottom: 18px;
+  margin-bottom: 28px;
 }
 .spells {
   display: flex;
@@ -296,60 +390,63 @@ onMounted(async () => {
   flex-wrap: wrap;
   justify-content: center;
 }
+.spell-slot {
+  position: relative;
+}
 .spell {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  width: 96px;
-  padding: 8px;
+  gap: 8px;
+  width: 104px;
+  padding: 14px 8px;
   font-size: 12px;
+  font-weight: 500;
   line-height: 1.2;
-  background: var(--code-bg);
-  color: var(--text-h);
-  border: 2px solid var(--border);
-  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-strong);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   cursor: pointer;
-  transition: border-color 0.2s, background 0.2s;
+  transition: border-color 0.15s, background 0.15s;
 }
 .spell img {
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   image-rendering: pixelated;
 }
 .spell:hover:not(:disabled) {
-  border-color: var(--accent-border);
+  border-color: var(--border-strong);
 }
 .spell.active {
   border-color: var(--accent);
-  background: var(--accent-bg);
+  background: var(--accent-soft);
 }
 .spell:disabled {
   opacity: 0.4;
   cursor: not-allowed;
   pointer-events: none;
 }
-.spell-slot {
-  position: relative;
-}
+
+/* Tooltip ------------------------------------------------------------------ */
 .tooltip {
   position: absolute;
   top: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
-  width: 230px;
+  width: 232px;
   display: none;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   text-align: left;
-  padding: 10px 12px;
-  background: var(--bg);
+  padding: 12px 14px;
+  background: var(--surface-2);
   color: var(--text);
-  border: 1px solid var(--accent-border);
-  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 1.45;
   z-index: 10;
   pointer-events: none;
 }
@@ -357,19 +454,22 @@ onMounted(async () => {
   display: flex;
 }
 .tooltip strong {
-  color: var(--text-h);
+  color: var(--text-strong);
   font-size: 13px;
+  font-weight: 600;
 }
 .tt-cost {
   color: var(--accent);
+  font-weight: 500;
 }
 .tt-effects {
-  color: var(--text-h);
-  font-style: italic;
+  color: var(--text-strong);
 }
+
+/* Actions ------------------------------------------------------------------ */
 .actions {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
   align-items: center;
   justify-content: center;
@@ -377,55 +477,67 @@ onMounted(async () => {
 .budget {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 14px;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
   color: var(--text);
 }
 button {
   font: inherit;
-  font-size: 15px;
-  padding: 8px 14px;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 9px 16px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--code-bg);
-  color: var(--text-h);
+  background: var(--surface);
+  color: var(--text-strong);
   cursor: pointer;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: border-color 0.15s, background 0.15s, opacity 0.15s;
 }
 button:hover:not(:disabled) {
-  border-color: var(--accent-border);
-  box-shadow: var(--shadow);
+  border-color: var(--border-strong);
+  background: var(--surface-2);
 }
 button:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 button.primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-contrast);
+  border-color: var(--accent);
+}
+button.primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+  background: var(--accent);
   border-color: var(--accent);
 }
 select {
   font: inherit;
-  font-size: 14px;
-  padding: 6px 8px;
+  font-size: 13px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+  padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: var(--code-bg);
-  color: var(--text-h);
+  background: var(--surface);
+  color: var(--text-strong);
+  cursor: pointer;
 }
+
+/* Board -------------------------------------------------------------------- */
 .board {
   position: relative;
-  display: inline-block;
+  display: block;
   line-height: 0;
 }
 canvas {
-  max-width: 100%;
+  display: block;
+  width: 100%;
   height: auto;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: #10141a;
-  box-shadow: var(--shadow);
 }
 .overlay {
   position: absolute;
@@ -433,19 +545,24 @@ canvas {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.6);
-  border-radius: 12px;
+  background: rgba(8, 9, 12, 0.68);
+  backdrop-filter: blur(3px);
 }
 .modal {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   align-items: center;
-  padding: 24px 28px;
-  background: var(--bg);
+  padding: 28px 32px;
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
   line-height: 1.4;
+}
+.modal :deep(h2) {
+  font-size: 1.375rem;
+  font-weight: 600;
+  color: var(--text-strong);
 }
 </style>

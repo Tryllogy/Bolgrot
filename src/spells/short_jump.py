@@ -14,7 +14,7 @@ class ShortJump(Spells):
 
     def __init__(
             self,
-            name: str = "Astral leap",
+            name: str = "Saut astral",
             description: str = "",
             cost: int = 1,
             max_use: int = 99,

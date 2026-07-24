@@ -14,7 +14,7 @@ class MoveFlames(Spells):
 
     def __init__(
             self,
-            name: str = "Inaction",
+            name: str = "Innaction",
             description: str = "",
             cost: int = 1,
             max_use: int = 99,

@@ -14,7 +14,7 @@ class LongJump(Spells):
 
     def __init__(
             self,
-            name: str = "Double leap",
+            name: str = "Double saut",
             description: str = "",
             cost: int = 2,
             max_use: int = 2,
