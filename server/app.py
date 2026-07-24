@@ -1,6 +1,8 @@
 import os
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 import asyncio
+import random
+from dataclasses import dataclass, field
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +12,7 @@ from src.entity.flame import Flame
 from src.case.case import CaseType
 from src import constant
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from uuid import uuid4
 
@@ -52,7 +55,11 @@ _POOL: ProcessPoolExecutor | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _POOL
-    _POOL = ProcessPoolExecutor(max_workers=4, initializer=_worker_init)
+    # Un uvicorn worker suffit : le parallélisme des recherches AZ (CPU-bound)
+    # vient de ce pool de process, pas des workers uvicorn (qui, eux,
+    # multiplieraient les copies du réseau en RAM). Taille réglable en prod.
+    workers = int(os.environ.get("AZ_POOL_WORKERS", "4"))
+    _POOL = ProcessPoolExecutor(max_workers=workers, initializer=_worker_init)
     yield
     _POOL.shutdown()
 
@@ -63,7 +70,51 @@ app.add_middleware(
     allow_origins=["http://localhost:5173"],
     allow_methods=["*"]
 )
-GAMES: dict[str, Game] = {}
+# --- Sessions : source de vérité rejouable + cache mémoire ------------------
+# Le jeu est DÉTERMINISTE : une partie est entièrement définie par sa seed et la
+# suite ordonnée d'événements (coups joués + vagues dessinées en mode perso).
+# On stocke donc ça (`Session`, entièrement JSON-sérialisable) comme source de
+# vérité, et on garde à côté un cache d'objets `Game` reconstruits par rejeu. Le
+# cache peut être vidé/évincé à tout moment (redémarrage, autre process) sans
+# rien perdre : `_get_game` rejoue la session à la demande.
+
+
+@dataclass
+class Session:
+    seed: int
+    is_custom: bool = False
+    initial_spawns: list | None = None   # perso : tuiles de la 1re vague
+    # événements ordonnés : ["step", action_index] | ["spawn", [[x, y], ...]]
+    events: list = field(default_factory=list)
+
+
+SESSIONS: dict[str, Session] = {}
+_CACHE: dict[str, Game] = {}
+
+
+def _build_game(s: Session) -> Game:
+    """Reconstruit un Game depuis sa session en rejouant ses événements."""
+    game = Game(Player(*constant.BASE_PLAYER_POS), seed=s.seed)
+    if s.is_custom:
+        game.waves_spawned = 0
+        game.spawn_pattern = [tuple(t) for t in (s.initial_spawns or [])]
+    for kind, payload in s.events:
+        if kind == "step":
+            game.step(action_index=payload)
+        else:  # "spawn" : override de la vague suivante (mode perso)
+            game.spawn_pattern = [tuple(t) for t in payload]
+    return game
+
+
+def _get_game(game_id: str) -> Game:
+    """Game depuis le cache, reconstruit par rejeu de la session si absent."""
+    if game_id not in SESSIONS:
+        raise HTTPException(status_code=404, detail="game not found")
+    game = _CACHE.get(game_id)
+    if game is None:
+        game = _build_game(SESSIONS[game_id])
+        _CACHE[game_id] = game
+    return game
 
 
 def view(game: Game) -> dict:
@@ -105,24 +156,27 @@ def view(game: Game) -> dict:
 
 @app.post("/games")
 def create_game(seed: int | None = None) -> dict:
-    game: Game = Game(Player(*constant.BASE_PLAYER_POS), seed=seed)
+    # Seed concrète obligatoire pour rejouer (None => non reproductible) : on la
+    # tire côté serveur si le client n'en fournit pas.
+    if seed is None:
+        seed = random.randrange(2 ** 63)
     id_game: str = uuid4().hex
-    GAMES.update({id_game: game})
+    SESSIONS[id_game] = Session(seed=seed)
+    game = _build_game(SESSIONS[id_game])  # live == chemin de rejeu (cohérence)
+    _CACHE[id_game] = game
     return {"game_id": id_game, "state": view(game)}
 
 
 @app.get("/games/{game_id}")
 def get_game(game_id: str) -> dict:
-    if game_id not in GAMES:
-        print("not in games")
-        raise HTTPException(status_code=404, detail="game not found")
-    return view(GAMES[game_id])
+    return view(_get_game(game_id))
 
 
 @app.post("/games/{game_id}/step")
 def step_game(game_id: str, action_index: int) -> dict:
-    game: Game = GAMES[game_id]
+    game = _get_game(game_id)
     reward, done = game.step(action_index=action_index)
+    SESSIONS[game_id].events.append(["step", action_index])
     return {
         "state": view(game),
         "reward": reward,
@@ -162,11 +216,18 @@ def create_custom_game(body: CustomGame) -> dict:
     # Full 6-wave game whose waves the PLAYER designs. This creates it with the
     # first wave's spawn points; the frontend sets each subsequent wave via
     # POST /games/{id}/spawn after every end-turn (num_waves stays the default).
-    game = Game(Player(*constant.BASE_PLAYER_POS))
-    game.waves_spawned = 0
-    game.spawn_pattern = _validate_tiles(game, body.spawns)
+    # Une seed concrète est tirée pour que la session soit rejouable (les vagues
+    # étant toutes dessinées par le joueur, elle ne change rien au jeu, mais
+    # rend tout tirage RNG résiduel reproductible).
     id_game = uuid4().hex
-    GAMES[id_game] = game
+    seed = random.randrange(2 ** 63)
+    probe = Game(Player(*constant.BASE_PLAYER_POS), seed=seed)
+    spawns = _validate_tiles(probe, body.spawns)
+    SESSIONS[id_game] = Session(
+        seed=seed, is_custom=True,
+        initial_spawns=[list(t) for t in spawns])
+    game = _build_game(SESSIONS[id_game])
+    _CACHE[id_game] = game
     return {"game_id": id_game, "state": view(game)}
 
 
@@ -179,18 +240,16 @@ def set_spawn(game_id: str, body: SpawnTiles) -> dict:
     # Override the next wave's spawn pattern with the player's chosen tiles
     # (used by the custom mode between turns; the auto-generated random wave is
     # discarded). Rejects tiles already occupied by the player / a flame.
-    if game_id not in GAMES:
-        raise HTTPException(status_code=404, detail="game not found")
-    game = GAMES[game_id]
-    game.spawn_pattern = _validate_tiles(game, body.tiles)
+    game = _get_game(game_id)
+    tiles = _validate_tiles(game, body.tiles)
+    game.spawn_pattern = tiles
+    SESSIONS[game_id].events.append(["spawn", [list(t) for t in tiles]])
     return {"state": view(game)}
 
 
 @app.get("/games/{game_id}/legal")
 def legal(game_id: str) -> dict:
-    if game_id not in GAMES:
-        raise HTTPException(status_code=404, detail="game not found")
-    game = GAMES[game_id]
+    game = _get_game(game_id)
     mask = game.legal_actions()
     actions = []
     for i, ok in enumerate(mask):
@@ -203,12 +262,20 @@ def legal(game_id: str) -> dict:
 
 @app.post("/games/{game_id}/hint")
 async def hint(game_id: str, sims: int = 1000) -> dict:
-    if game_id not in GAMES:
-        raise HTTPException(status_code=404, detail="game not found")
-    game = GAMES[game_id]
+    game = _get_game(game_id)
     state_dict = game.get_state()
     loop = asyncio.get_running_loop()
     index = await loop.run_in_executor(
         _POOL, _worker_hint, state_dict, game.num_waves, sims)
     spell_index, (dx, dy) = Game.ACTIONS[index]
     return {"index": index, "spell": spell_index, "dx": dx, "dy": dy}
+
+
+# --- Front statique ---------------------------------------------------------
+# Le front buildé (`web/dist`, via `npm run build`) est servi par FastAPI lui-
+# même : une seule origine en prod, plus besoin de CORS. Ce mount est monté en
+# DERNIER pour que toutes les routes API ci-dessus aient la priorité, et il est
+# conditionnel pour que le serveur démarre en dev même sans build.
+_DIST = os.path.join(os.path.dirname(__file__), "..", "web", "dist")
+if os.path.isdir(_DIST):
+    app.mount("/", StaticFiles(directory=_DIST, html=True), name="static")

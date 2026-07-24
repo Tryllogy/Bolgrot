@@ -22,8 +22,12 @@ import { startRandom, openEditor } from "../composables/useGame.js";
       L'IA est un assistant très fort, mais la victoire n'est pas garantie à
       chaque partie. Sur un niveau perdu, « Réessayer plus fort » la relance avec
       plus de réflexion (elle finit par gagner en cherchant plus profond).
-      Attention : augmenter les sims augmente le temps de calcul (~1 s / 1000
-      sims).
+    </p>
+    <p class="disclaimer">
+      <b>
+        Attention : augmenter les sims augmente le temps de calcul (~1 s / 1000
+        sims).
+      </b>
     </p>
   </section>
 </template>

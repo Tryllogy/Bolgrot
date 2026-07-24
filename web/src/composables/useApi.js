@@ -1,5 +1,7 @@
 // Toutes les requêtes vers le backend, centralisées.
-const BASE_URL = "http://127.0.0.1:8000";
+// En dev (vite) le back tourne sur un autre port ; en prod le front buildé est
+// servi par FastAPI lui-même, donc l'URL est relative (même origine).
+const BASE_URL = import.meta.env.DEV ? "http://127.0.0.1:8000" : "";
 
 async function jget(path) {
   const r = await fetch(BASE_URL + path);

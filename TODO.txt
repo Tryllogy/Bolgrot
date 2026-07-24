@@ -95,11 +95,25 @@ PHASE 5 — PRODUIT & POLISH
 --------------------------------------------------------------------------------
 PHASE 6 — DÉPLOIEMENT
 --------------------------------------------------------------------------------
-[ ] 6.1  Build front (vite build -> statique) servi par FastAPI ou un CDN.
-[ ] 6.2  uvicorn/gunicorn en prod ; workers = process pool pour les recherches AZ.
-[ ] 6.3  État de session : passer du dict mémoire à qqch de robuste (le jeu est
-         DÉTERMINISTE -> on peut ne stocker que seed + liste d'actions et rejouer,
-         plutôt qu'un objet en RAM par joueur). Concept clé, je détaille le moment venu.
+[x] 6.1  Build front (`npm run build` -> web/dist) servi par FastAPI : mount
+         StaticFiles(html=True) monté EN DERNIER (API prioritaire), conditionnel
+         (démarre sans build en dev). useApi BASE_URL relatif en prod (même
+         origine -> plus de CORS). Vérifié : / sert index.html, assets 200, API OK.
+[x] 6.2  Un seul uvicorn worker + ProcessPoolExecutor interne pour les recherches
+         AZ (workers uvicorn = copies du réseau en RAM, à éviter). Taille du pool
+         réglable via AZ_POOL_WORKERS (défaut 4). Commande prod : uvicorn
+         server.app:app --host 0.0.0.0 --port 8000 (le lancement va avec 6.4).
+[x] 6.3  Sessions robustes = cache + rejeu. Source de vérité `Session(seed,
+         is_custom, initial_spawns, events)` où events = suite ordonnée
+         ["step", idx] | ["spawn", tiles] (JSON-sérialisable). `_build_game`
+         reconstruit un Game par rejeu ; `_get_game` sert depuis un cache mémoire
+         et rejoue en cas d'absence (redémarrage / éviction / autre process). Le
+         live est bâti par le MÊME chemin de rejeu (cohérence). Seed concrète
+         tirée serveur-side (même en perso) pour reproductibilité. Vérifié :
+         rejeu identique après vidage du cache en aléatoire ET perso (override de
+         vague + flammes), + smoke HTTP create/step/legal/hint/get/404. Persistance
+         disque/redis désormais triviale (dump des Session). Éviction LRU : à
+         brancher plus tard, le modèle la supporte déjà.
 [ ] 6.4  Docker + hébergement.
 
 ================================================================================
