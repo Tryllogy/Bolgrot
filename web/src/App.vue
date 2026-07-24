@@ -23,6 +23,8 @@ const FLAME_R = H * 0.38; // rayon des flammes, proportionnel à la tuile
 const UNIT_R = H * 0.48; // rayon joueur / Bolgrot
 const hover = ref(null); // case sous le curseur {x, y} ou null
 let cellSet = new Set(); // clés "x,y" des cases valides (pour le hover)
+const toast = ref(null); // texte éphémère (coup joué par l'IA)
+let toastTimer = null;
 
 function fitBoard() {
   cellSet = new Set();
@@ -104,6 +106,17 @@ function descLines(desc) {
   return desc.split(".").map((s) => s.trim()).filter(Boolean);
 }
 
+function moveLabel(m) {
+  if (m.spell === null || m.spell === undefined) return "Fin de tour";
+  return view.value.spells[m.spell]?.name ?? "Sort";
+}
+
+function showToast(msg) {
+  toast.value = msg;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (toast.value = null), 1800);
+}
+
 function pixelToCell(event) {
   const canvas = canvas_ref.value;
   const rect = canvas.getBoundingClientRect();
@@ -178,6 +191,7 @@ async function askHint() {
   );
   hint.value = await r.json();
   hintLoading.value = false;
+  showToast(`Indice : ${moveLabel(hint.value)}`);
   render();
 }
 
@@ -189,6 +203,7 @@ async function toggleAutoplay() {
       { method: "POST" }
     );
     const h = await r.json();
+    showToast(`${moveLabel(h)}`);
     await playAction(h.index);
     await new Promise((res) => setTimeout(res, 300));
   }
@@ -203,6 +218,7 @@ async function solveOnce(budget) {
       { method: "POST" }
     );
     const h = await r.json();
+    showToast(`${moveLabel(h)}`);
     await playAction(h.index);
     await new Promise((res) => setTimeout(res, 150));
   }
@@ -244,11 +260,11 @@ onMounted(async () => {
     <div v-if="view" class="hud">
       <div class="stat">
         <span class="stat-label">PV</span>
-        <span class="stat-value">{{ view.player.hp }}</span>
+        <span class="stat-value hp">{{ view.player.hp }}</span>
       </div>
       <div class="stat">
         <span class="stat-label">PA</span>
-        <span class="stat-value">{{ view.player.pa }}</span>
+        <span class="stat-value pa">{{ view.player.pa }}</span>
       </div>
       <div class="stat">
         <span class="stat-label">Vague</span>
@@ -280,9 +296,9 @@ onMounted(async () => {
             <span v-if="sp.effects.length" class="tt-effects">{{ sp.effects.join(" · ") }}</span>
           </span>
         </div>
+        <button class="end-turn" @click="playAction(16)">Fin de tour</button>
       </div>
       <div class="actions">
-        <button @click="playAction(16)">Fin de tour</button>
         <label class="budget">
           Budget IA
           <select v-model.number="sims">
@@ -308,6 +324,9 @@ onMounted(async () => {
         ref="canvas_ref"
         :width="canvasW"
         :height="canvasH"></canvas>
+      <Transition name="fade">
+        <div v-if="toast" class="toast">{{ toast }}</div>
+      </Transition>
       <div v-if="view && view.done" class="overlay">
         <div class="modal">
           <h2>{{ view.won ? "Victoire !" : "Défaite" }}</h2>
@@ -375,6 +394,12 @@ onMounted(async () => {
   color: var(--text-strong);
   font-variant-numeric: tabular-nums;
 }
+.stat-value.hp {
+  color: #e0554b;
+}
+.stat-value.pa {
+  color: #3399ff;
+}
 
 /* Controls ----------------------------------------------------------------- */
 .controls {
@@ -389,6 +414,11 @@ onMounted(async () => {
   gap: 10px;
   flex-wrap: wrap;
   justify-content: center;
+  align-items: center;
+}
+.end-turn {
+  margin-left: 104px; /* espacement d'une largeur de sort */
+  align-self: center;
 }
 .spell-slot {
   position: relative;
@@ -538,6 +568,32 @@ canvas {
   display: block;
   width: 100%;
   height: auto;
+}
+.toast {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  box-shadow: var(--shadow);
+  pointer-events: none;
+  z-index: 5;
+}
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 .overlay {
   position: absolute;
