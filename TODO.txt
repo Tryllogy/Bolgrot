@@ -114,15 +114,29 @@ PHASE 6 — DÉPLOIEMENT
          vague + flammes), + smoke HTTP create/step/legal/hint/get/404. Persistance
          disque/redis désormais triviale (dump des Session). Éviction LRU : à
          brancher plus tard, le modèle la supporte déjà.
-[ ] 6.4  Docker + hébergement. CIBLE : Hugging Face Spaces (gratuit, ~16 Go RAM
-         + 2 vCPU, Docker natif -> assez pour torch + le pool ; le setup 6.1
-         front-servi-par-FastAPI = un seul Space pour front+API, pas de CORS).
-         Dockerfile multi-stage : (1) node build -> web/dist, (2) python runtime.
-         IMPORTANT : installer torch CPU-only (index cpu, PAS les libs CUDA) ->
-         image ~700 Mo au lieu de ~2-3 Go, démarrage plus rapide, tient dans plus
-         d'hébergeurs. Pièges tiers gratuits : veille/cold-start (1er hint recharge
-         torch, qq s) + vCPU faible (hint 1000 sims ~3-5 s -> proposer le mode
-         rapide 300). Vérifier les limites RAM actuelles avant de se lancer.
+[x] 6.4  Docker + hébergement (CODE FAIT ; reste l'action manuelle : provisionner
+         la VM + déployer). CIBLE : VM Oracle Cloud Always Free (ARM, gratuit à vie,
+         24/7). HF ABANDONNÉ : depuis 2026 les Spaces Docker sont PAYANTS (PRO ~9$/
+         mois), le tier gratuit ne fait plus tourner de backend Docker.
+         Livrés : `Dockerfile` multi-stage (1: node build -> web/dist, 2: runtime
+         python:3.12-slim), `requirements-deploy.txt`, `.dockerignore`, `DEPLOY.md`
+         (procédure Oracle pas-à-pas : VM Ampere -> ports 80/443 (piège iptables
+         Oracle) -> DuckDNS -> Docker -> conteneur -> Caddy HTTPS auto).
+         torch ARCH-AWARE : ARM -> PyPI (déjà CPU-only) ; x86_64 -> index CPU
+         (pas de CUDA, image ~700 Mo). User UID 1000, port $PORT (défaut 7860,
+         honoré pour Cloud Run aussi). Validé LOCALEMENT avec la commande prod
+         exacte (uvicorn server.app:app) : front `dist` servi (index.html/favicon
+         bleu/og-image), API create/step/legal OK, hint via ProcessPool torch OK.
+         Build Docker NON testé en local (pas de Docker ici) -> le Dockerfile
+         inclut un `RUN python -c "import torch,...,pygame"` fail-fast. Portable :
+         marche aussi sur Google Cloud Run (scale-to-zero, Always Free) sans modif.
+         DÉPLOYÉ (2026-07-27) sur GOOGLE CLOUD RUN, pas Oracle : Oracle Ampere
+         resté "Out of capacity" après 310+ tentatives -> bascule Cloud Run
+         (gratuit, scale-to-zero, HTTPS auto *.run.app, aucune VM). LIVE :
+         https://bolgrot-600696832923.europe-west9.run.app (projet bolgrot-app).
+         Hint prod à chaud : 0.55s@300 / 1.7s@1000 / 12.6s@8000 ; cold start
+         ~7-10s au 1er hint. Runbook Cloud Run + procédure Oracle : DEPLOY.md.
+         Redeploy : gcloud run deploy --source . (cf. DEPLOY.md).
 
 ================================================================================
 PROCHAINE ÉTAPE IMMÉDIATE : confirmer 0.1 (forme du produit), puis on attaque

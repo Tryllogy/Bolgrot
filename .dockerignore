@@ -1,0 +1,14 @@
+# Contexte de build minimal : on ne copie que src/, server/ et web/ (source),
+# le front est rebuild dans l'image, les deps réinstallées. Tout le reste est
+# exclu pour un build rapide et une image légère.
+.venv
+web/node_modules
+web/dist
+.git
+.gitignore
+tmp
+**/__pycache__
+*.pyc
+.mypy_cache
+.pytest_cache
+*.xcf

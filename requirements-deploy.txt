@@ -1,0 +1,7 @@
+# Dépendances RUNTIME du déploiement (pas torch : installé à part depuis l'index
+# CPU dans le Dockerfile, sinon pip tire la build CUDA ~2-3 Go). Versions alignées
+# sur les extras `web`/`ai` de pyproject.toml.
+numpy>=1.24
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pygame>=2.6.1,<3
