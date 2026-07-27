@@ -118,6 +118,23 @@ def main() -> None:
                              "it plays well but never finishes) rather than the "
                              "value/reward scale; combine with --bootstrap-games "
                              "so the win buffer is seeded with MCTS wins.")
+    parser.add_argument("--gumbel", action="store_true",
+                        help="Gumbel self-play: select moves by Gumbel-root "
+                             "search and train on the improved-policy target "
+                             "(lower-noise than visit counts at the self-play "
+                             "budget). The one lever that changes policy-target "
+                             "quality; needs a fresh run (never --out az.pt).")
+    parser.add_argument("--gumbel-m", type=int, default=16,
+                        help="Gumbel-Top-k candidate count at the root")
+    parser.add_argument("--search", choices=("puct", "negamax"), default="puct",
+                        help="self-play + eval search operator. negamax = "
+                             "depth-limited max-backup (top-k by prior); the "
+                             "eval is co-trained FOR it (Stockfish test). "
+                             "Needs a fresh run (never --out az.pt).")
+    parser.add_argument("--nm-depth", type=int, default=5,
+                        help="negamax search depth (search=negamax)")
+    parser.add_argument("--nm-k", type=int, default=4,
+                        help="negamax branching = top-k by prior (search=negamax)")
     parser.add_argument("--c-puct", type=float, default=1.5)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--hidden", type=int, default=64,
@@ -184,6 +201,11 @@ def main() -> None:
         c_puct=args.c_puct,
         learning_rate=args.lr,
         value_mode=args.value_target,
+        use_gumbel=args.gumbel,
+        gumbel_m=args.gumbel_m,
+        search=args.search,
+        nm_depth=args.nm_depth,
+        nm_k=args.nm_k,
         hidden=args.hidden,
         seed=args.seed,
         eval_every=args.eval_every,

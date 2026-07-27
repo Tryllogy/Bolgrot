@@ -356,6 +356,222 @@ def _search(game: Game, net: ActorCritic, simulations: int, c_puct: float,
     return root, minmax
 
 
+# --- Gumbel self-play (optional "stronger" lever) ---------------------------
+# Danihelka et al. 2022, "Policy improvement by planning with Gumbel". Below the
+# root this stays ordinary PUCT; at the root it does Gumbel-Top-k candidate
+# selection + sequential halving, and — the point for TRAINING — it produces an
+# *improved-policy* target (softmax of logit + sigma(completedQ)) that is less
+# noisy than visit counts at the modest self-play sim budget. All nine prior
+# training levers kept plain-PUCT self-play with a visit-count target; this is
+# the one that changes the policy-target quality itself. Off by default
+# (``use_gumbel=False``) — the standard path above is untouched.
+
+def _gumbel_noise(rng: random.Random) -> float:
+    u = rng.random()
+    return -math.log(-math.log(u + 1e-12) + 1e-12)
+
+
+def _simulate_forced(root: _Node, work: Game, net: ActorCritic, forced_a: int,
+                     c_puct: float, gamma: float, minmax: _MinMaxStats,
+                     value_mode: str) -> None:
+    """One simulation whose FIRST root action is ``forced_a`` (below root:
+    ordinary PUCT). Mirrors :func:`_simulate` in every other respect."""
+    node = root
+    path: list[tuple[_Node, int]] = []
+    leaf_value = 0.0
+    first = True
+    while node.expanded and not node.done:
+        a = forced_a if first else _puct_select(node, c_puct, minmax)
+        first = False
+        path.append((node, a))
+        child = node.children.get(a)
+        if child is not None:
+            node = child
+            continue
+        work.set_state(node.state)
+        reward, _ = work.step(a)
+        if value_mode == "winloss":
+            reward = (1.0 if work.won else -1.0) if work.done else 0.0
+        elif value_mode == "blend" and work.done:
+            reward += BLEND_TERMINAL_BONUS if work.won else -BLEND_TERMINAL_BONUS
+        elif value_mode == "twohead" and work.done:
+            reward += TWOHEAD_WIN_WEIGHT if work.won else -TWOHEAD_WIN_WEIGHT
+        node.edge_reward[a] = reward
+        child = _Node(work)
+        node.children[a] = child
+        leaf_value = (0.0 if child.done
+                      else _evaluate(child, work, net, value_mode))
+        break
+    g = leaf_value
+    for parent, a in reversed(path):
+        g = parent.edge_reward[a] + gamma * g
+        parent.N[a] += 1
+        parent.W[a] += g
+        minmax.update(parent.W[a] / parent.N[a])
+
+
+def _gumbel_search(game: Game, net: ActorCritic, simulations: int, m: int,
+                   c_puct: float, gamma: float, rng: random.Random,
+                   num_actions: int, value_mode: str,
+                   c_visit: float = 50.0, c_scale: float = 1.0
+                   ) -> tuple[int, list[float]]:
+    """Gumbel-root search. Returns ``(action, improved_pi)``.
+
+    ``improved_pi`` (length ``num_actions``) is the policy target: softmax over
+    legal actions of ``logit(a) + sigma(completedQ(a))`` with **no** Gumbel noise
+    (noise is for action selection only). ``completedQ`` uses the net's root
+    value for unvisited actions (value completion), so every legal action gets a
+    coherent target even at a small sim budget.
+    """
+    work = game.clone()
+    root = _Node(work)
+    v_root = _evaluate(root, work, net, value_mode)
+    legal = root.legal
+    pi = [0.0] * num_actions
+    if not legal:
+        return 0, pi
+    if len(legal) == 1:
+        pi[legal[0]] = 1.0
+        return legal[0], pi
+
+    obs = torch.as_tensor(work.get_observation(), dtype=torch.float32)
+    with torch.no_grad():
+        logits_full, _ = net(obs)
+    logit = {a: float(logits_full[a]) for a in legal}
+    gv = {a: _gumbel_noise(rng) for a in legal}
+
+    m = min(m, len(legal))
+    cand = sorted(legal, key=lambda a: logit[a] + gv[a], reverse=True)[:m]
+    minmax = _MinMaxStats()
+
+    def cq(a: int) -> float:
+        n = root.N[a]
+        return root.W[a] / n if n else v_root
+
+    phases = max(1, math.ceil(math.log2(m)))
+    remaining = cand
+    for _ in range(phases):
+        per = max(1, simulations // (phases * len(remaining)))
+        for a in remaining:
+            for _ in range(per):
+                _simulate_forced(root, work, net, a, c_puct, gamma, minmax,
+                                 value_mode)
+        if len(remaining) == 1:
+            break
+        max_n = max((root.N[a] for a in cand if root.N[a]), default=1)
+        remaining = sorted(
+            remaining,
+            key=lambda a: gv[a] + logit[a]
+            + (c_visit + max_n) * c_scale * minmax.normalize(cq(a)),
+            reverse=True)[:max(1, len(remaining) // 2)]
+
+    max_n = max((root.N[a] for a in cand if root.N[a]), default=1)
+    action = max(remaining, key=lambda a: gv[a] + logit[a]
+                 + (c_visit + max_n) * c_scale * minmax.normalize(cq(a)))
+
+    scores = [logit[a] + (c_visit + max_n) * c_scale * minmax.normalize(cq(a))
+              for a in legal]
+    mx = max(scores)
+    exps = [math.exp(s - mx) for s in scores]
+    z = sum(exps) or 1.0
+    for a, e in zip(legal, exps):
+        pi[a] = e / z
+    return action, pi
+
+
+# --- Negamax operator (optional "Stockfish-style" self-play/deploy) ---------
+# Depth-limited MAX-backup (1-player, so no min ply), selective to the top-k
+# children by the net's policy prior; net value*scale at the horizon; dominant
+# ±terminal so a forced win/death within d plies is chosen/avoided. Unlike PUCT
+# it *backs up* the value exactly (no averaging), and unlike the beam solver it
+# is the search AZ trains AGAINST when search="negamax": the eval is then
+# co-adapted to it (the true Stockfish test — an evaluator trained FOR a deep
+# backup search, not borrowed from a PUCT run). Deploy/eval via nm_action_fn.
+_NM_TERMINAL = 1e5
+
+
+@torch.no_grad()
+def _negamax_value(work: Game, state: dict, depth: int, k: int,
+                   net: ActorCritic, gamma: float, value_mode: str) -> float:
+    work.set_state(state)
+    obs = torch.as_tensor(work.get_observation(), dtype=torch.float32)
+    logits, value = net(obs)
+    if depth == 0:
+        return _leaf_value(value, value_mode)
+    mask = work.legal_actions()
+    m = torch.as_tensor(mask, dtype=torch.bool)
+    probs = torch.softmax(logits.masked_fill(~m, MASK_FILL), dim=-1)
+    legal = [i for i, ok in enumerate(mask) if ok]
+    topk = sorted(legal, key=lambda a: float(probs[a]), reverse=True)[:k]
+    best = -1e18
+    for a in topk:
+        work.set_state(state)
+        r, _ = work.step(a)
+        if work.done:
+            v = r + (_NM_TERMINAL if work.won else -_NM_TERMINAL)
+        else:
+            v = r + gamma * _negamax_value(work, work.get_state(), depth - 1,
+                                           k, net, gamma, value_mode)
+        if v > best:
+            best = v
+    return best
+
+
+@torch.no_grad()
+def _negamax_root(game: Game, net: ActorCritic, depth: int, k: int,
+                  gamma: float, value_mode: str) -> dict[int, float]:
+    """Backed-up value of each top-k root action. Empty dict if no legal move."""
+    work = game.clone()
+    root = work.get_state()
+    obs = torch.as_tensor(work.get_observation(), dtype=torch.float32)
+    logits, _ = net(obs)
+    mask = work.legal_actions()
+    m = torch.as_tensor(mask, dtype=torch.bool)
+    probs = torch.softmax(logits.masked_fill(~m, MASK_FILL), dim=-1)
+    legal = [i for i, ok in enumerate(mask) if ok]
+    topk = sorted(legal, key=lambda a: float(probs[a]), reverse=True)[:k]
+    q: dict[int, float] = {}
+    for a in topk:
+        work.set_state(root)
+        r, _ = work.step(a)
+        if work.done:
+            q[a] = r + (_NM_TERMINAL if work.won else -_NM_TERMINAL)
+        else:
+            q[a] = r + gamma * _negamax_value(work, work.get_state(), depth - 1,
+                                              k, net, gamma, value_mode)
+    return q
+
+
+def _negamax_policy(q: dict[int, float], num_actions: int) -> list[float]:
+    """Peaked-but-soft policy target from backed-up Q (numerically safe)."""
+    pi = [0.0] * num_actions
+    if not q:
+        return pi
+    acts = list(q)
+    qs = [q[a] for a in acts]
+    mx = max(qs)
+    scale = max(1.0, (mx - min(qs)) / 4.0)
+    exps = [math.exp((v - mx) / scale) for v in qs]
+    z = sum(exps) or 1.0
+    for a, e in zip(acts, exps):
+        pi[a] = e / z
+    return pi
+
+
+def nm_action_fn(net: ActorCritic, depth: int = 5, k: int = 4,
+                 gamma: float = 0.99, value_mode: str = "shaped") -> ActionFn:
+    """Deploy/eval form: play the argmax backed-up negamax action."""
+    def act(game: Game) -> int:
+        if game.done:
+            return 0
+        q = _negamax_root(game, net, depth, k, gamma, value_mode)
+        if not q:
+            legal = game.legal_actions()
+            return next((i for i, ok in enumerate(legal) if ok), 0)
+        return max(q, key=lambda a: q[a])
+    return act
+
+
 # --- Self-play --------------------------------------------------------------
 
 @dataclass
@@ -435,6 +651,11 @@ def self_play_game(net: ActorCritic, seed: int, simulations: int,
                    dirichlet_alpha: float = 0.3,
                    temp_moves: int = 12,
                    value_mode: str = "shaped",
+                   use_gumbel: bool = False,
+                   gumbel_m: int = 16,
+                   search: str = "puct",
+                   nm_depth: int = 5,
+                   nm_k: int = 4,
                    max_steps: int = 500) -> tuple[list[_Sample], bool]:
     """Play one self-play game; return ``(samples, won)``.
 
@@ -454,6 +675,41 @@ def self_play_game(net: ActorCritic, seed: int, simulations: int,
     for ply in range(max_steps):
         if game.done:
             break
+        if search == "negamax":
+            q = _negamax_root(game, net, nm_depth, nm_k, gamma, value_mode)
+            if not q:
+                legal = game.legal_actions()
+                action = next((i for i, ok in enumerate(legal) if ok), 0)
+                reward, _ = game.step(action)
+                rewards.append(reward)
+                continue
+            pi = _negamax_policy(q, num_actions)
+            samples.append(_Sample(obs=game.get_observation(),
+                                   mask=game.legal_actions(), pi=pi))
+            if ply < temp_moves:
+                acts = list(q)
+                weights = [pi[a] for a in acts]
+                action = rng.choices(acts, weights=weights, k=1)[0]
+            else:
+                action = max(q, key=lambda a: q[a])
+            reward, _ = game.step(action)
+            rewards.append(reward)
+            continue
+        if use_gumbel:
+            action, pi = _gumbel_search(game, net, simulations, gumbel_m,
+                                        c_puct, gamma, rng, num_actions,
+                                        value_mode)
+            if not any(pi):
+                legal = game.legal_actions()
+                action = next((i for i, ok in enumerate(legal) if ok), 0)
+                reward, _ = game.step(action)
+                rewards.append(reward)
+                continue
+            samples.append(_Sample(obs=game.get_observation(),
+                                   mask=game.legal_actions(), pi=pi))
+            reward, _ = game.step(action)
+            rewards.append(reward)
+            continue
         root, _ = _search(game, net, simulations, c_puct, gamma, rng,
                           dirichlet_alpha=dirichlet_alpha,
                           value_mode=value_mode)
@@ -642,7 +898,8 @@ def _worker_load_teacher(path: str) -> ActorCritic:
 
 def _selfplay_task(args: tuple) -> tuple[list[_Sample], bool]:
     (net_path, version, seed, sims, c_puct, gamma, num_actions, stage,
-     dirichlet_alpha, temp_moves, value_mode) = args
+     dirichlet_alpha, temp_moves, value_mode, use_gumbel, gumbel_m,
+     search, nm_depth, nm_k) = args
     net = _worker_load_net(net_path, version)
     nw, fpw, sr, fm = stage
     return self_play_game(
@@ -650,7 +907,8 @@ def _selfplay_task(args: tuple) -> tuple[list[_Sample], bool]:
         rng=random.Random(seed), num_actions=num_actions,
         num_waves=nw, flames_per_wave=fpw, spawn_radius=sr, spawn_formation=fm,
         dirichlet_alpha=dirichlet_alpha, temp_moves=temp_moves,
-        value_mode=value_mode)
+        value_mode=value_mode, use_gumbel=use_gumbel, gumbel_m=gumbel_m,
+        search=search, nm_depth=nm_depth, nm_k=nm_k)
 
 
 def _bootstrap_task(args: tuple) -> tuple[list[_Sample], bool, int]:
@@ -699,11 +957,16 @@ def _az_bootstrap_task(args: tuple) -> tuple[list[_Sample], bool, int]:
 
 
 def _eval_task(args: tuple) -> tuple[float, bool, dict]:
-    (net_path, version, seed, sims, c_puct, gamma, value_mode, stage) = args
+    (net_path, version, seed, sims, c_puct, gamma, value_mode, stage,
+     search, nm_depth, nm_k) = args
     from .policy import run_episode_decomposed
     net = _worker_load_net(net_path, version)
-    act = az_action_fn(net, simulations=sims, c_puct=c_puct, gamma=gamma,
-                       value_mode=value_mode)
+    if search == "negamax":
+        act = nm_action_fn(net, depth=nm_depth, k=nm_k, gamma=gamma,
+                           value_mode=value_mode)
+    else:
+        act = az_action_fn(net, simulations=sims, c_puct=c_puct, gamma=gamma,
+                           value_mode=value_mode)
     nw, fpw, sr, fm = stage
     total, won, _steps, parts = run_episode_decomposed(
         act, seed, num_waves=nw, flames_per_wave=fpw, spawn_radius=sr,
@@ -780,6 +1043,20 @@ class AZConfig:
     weight_decay: float = 1e-4
     value_coef: float = 1.0         # value-loss weight relative to policy loss
     value_mode: str = "shaped"      # "shaped"|"winloss"|"blend"|"twohead"
+    # Gumbel self-play (the "stronger" lever). When True, self-play selects moves
+    # by Gumbel-root search and records the *improved-policy* target (softmax of
+    # logit + sigma(completedQ)) instead of the visit distribution — a
+    # lower-noise policy target at the self-play sim budget. Off = byte-for-byte
+    # the old PUCT/visit-count self-play. Eval/bootstrap are unaffected.
+    use_gumbel: bool = False
+    gumbel_m: int = 16              # Gumbel-Top-k candidate count at the root
+    # Search operator for self-play + eval. "puct" (default, unchanged) or
+    # "negamax": depth-limited max-backup selective to top-k-by-prior. With
+    # negamax the eval is co-trained FOR a deep backup search (the Stockfish
+    # test). eval uses the same operator so the gate judges what it will deploy.
+    search: str = "puct"           # "puct" | "negamax"
+    nm_depth: int = 5              # negamax search depth
+    nm_k: int = 4                  # negamax branching (top-k by prior)
     hidden: int = 64
     seed: int = 1
     eval_every: int = 5
@@ -1110,7 +1387,8 @@ def train(cfg: AZConfig) -> ActorCritic:
             tasks = [(net_file, version, rng.randrange(1 << 30),
                       cfg.simulations, cfg.c_puct, cfg.gamma, num_actions,
                       (nw, fpw, sr, fm), cfg.dirichlet_alpha, cfg.temp_moves,
-                      cfg.value_mode)
+                      cfg.value_mode, cfg.use_gumbel, cfg.gumbel_m,
+                      cfg.search, cfg.nm_depth, cfg.nm_k)
                      for _ in range(cfg.games_per_iter)]
             for samples, won in pool.map(_selfplay_task, tasks):
                 buffer.extend(samples)
@@ -1127,7 +1405,9 @@ def train(cfg: AZConfig) -> ActorCritic:
                     spawn_formation=fm,
                     dirichlet_alpha=cfg.dirichlet_alpha,
                     temp_moves=cfg.temp_moves,
-                    value_mode=cfg.value_mode)
+                    value_mode=cfg.value_mode,
+                    use_gumbel=cfg.use_gumbel, gumbel_m=cfg.gumbel_m,
+                    search=cfg.search, nm_depth=cfg.nm_depth, nm_k=cfg.nm_k)
                 buffer.extend(samples)
                 if use_win_buffer and won:
                     win_buffer.extend(samples)
@@ -1149,7 +1429,8 @@ def train(cfg: AZConfig) -> ActorCritic:
             if pool is not None:
                 version = ship_net()
                 tasks = [(net_file, version, s, eval_sims, cfg.c_puct,
-                          cfg.gamma, cfg.value_mode, (nw, fpw, sr, fm))
+                          cfg.gamma, cfg.value_mode, (nw, fpw, sr, fm),
+                          cfg.search, cfg.nm_depth, cfg.nm_k)
                          for s in cfg.eval_seeds]
                 results = pool.map(_eval_task, tasks)
                 from ..game import REWARD_PARTS
@@ -1159,9 +1440,13 @@ def train(cfg: AZConfig) -> ActorCritic:
                 parts = {p: sum(r[2][p] for r in results) / n
                          for p in REWARD_PARTS}
             else:
-                act = az_action_fn(net, simulations=eval_sims,
-                                   c_puct=cfg.c_puct, gamma=cfg.gamma,
-                                   value_mode=cfg.value_mode)
+                if cfg.search == "negamax":
+                    act = nm_action_fn(net, depth=cfg.nm_depth, k=cfg.nm_k,
+                                       gamma=cfg.gamma, value_mode=cfg.value_mode)
+                else:
+                    act = az_action_fn(net, simulations=eval_sims,
+                                       c_puct=cfg.c_puct, gamma=cfg.gamma,
+                                       value_mode=cfg.value_mode)
                 mean_reward, win_rate, parts = _eval_action_fn(
                     act, cfg.eval_seeds, nw, fpw, sr, fm)
             stage_tag = (f" | stage {stage_idx}/{len(stages) - 1} "
