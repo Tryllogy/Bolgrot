@@ -1,0 +1,13 @@
+{
+  "hosting": {
+    "site": "bolgrot",
+    "public": "fb_public",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "run": { "serviceId": "bolgrot", "region": "europe-west9" }
+      }
+    ]
+  }
+}

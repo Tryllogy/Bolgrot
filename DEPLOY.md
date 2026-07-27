@@ -222,6 +222,43 @@ La commande affiche l'URL `https://bolgrot-xxxx.run.app` à la fin.
 Ouvre l'URL `*.run.app` → le jeu s'affiche (HTTPS), le bouton *Indice* renvoie un
 coup (le **tout premier** peut prendre ~10 s = cold start, ensuite instantané).
 
+## 5. URL propre gratuite — Firebase Hosting devant Cloud Run
+
+L'URL `*.run.app` contient le numéro de projet (moche). **Firebase Hosting**
+(même compte Google) donne un sous-domaine propre **`bolgrot.web.app`** en HTTPS,
+gratuit, en relayant *tout* le trafic vers le service Cloud Run (front + API).
+
+Le repo contient déjà `firebase.json` (rewrite `**` → run `bolgrot`/`europe-west9`),
+`.firebaserc` (projet `bolgrot-app`) et `fb_public/` (dossier public vide : tout
+passe par le rewrite). Setup (une fois) :
+```bash
+npm install -g firebase-tools
+firebase login                                  # interactif (navigateur)
+```
+> ⚠️ **ToS Firebase** : pour un compte Google qui n'a jamais utilisé Firebase,
+> `firebase projects:addfirebase` renvoie **403 « permission denied »** même en
+> étant Owner — il faut accepter les conditions **dans la console** une fois :
+> https://console.firebase.google.com → *Ajouter un projet* → sélectionner le
+> projet GCP existant **bolgrot-app** → accepter les ToS (Analytics inutile).
+
+Puis, activation + site + déploiement :
+```bash
+gcloud services enable firebase.googleapis.com firebasehosting.googleapis.com \
+  --project bolgrot-app
+firebase hosting:sites:create bolgrot --project bolgrot-app   # -> bolgrot.web.app
+firebase deploy --only hosting --project bolgrot-app
+```
+`europe-west9` (Paris) est une région supportée par les rewrites Firebase → pas
+besoin de déplacer le service. Redéployer le hosting (rare, seulement si
+`firebase.json` change) : `firebase deploy --only hosting`. Le code applicatif se
+met à jour via `gcloud run deploy` (§3) — le rewrite pointe le service, pas une
+révision figée.
+
+## 6. Vérifier (URL finale)
+
+Ouvre **https://bolgrot.web.app** → jeu + bouton *Indice*. (L'URL `*.run.app`
+reste valable en direct.)
+
 ## Mettre à jour · options
 
 - **Redéployer** : `git push` puis relancer la commande `gcloud run deploy` du §3
