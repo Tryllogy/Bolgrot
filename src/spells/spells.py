@@ -350,7 +350,7 @@ class Spells(ABC):
 
         flame_cases = [
             case for case in cases.values()
-            if isinstance(case.entity, Flame)
+            if type(case.entity) is Flame
             and (case.x, case.y) != (pos_x, pos_y)
         ]
         flame_cases.sort(
@@ -377,9 +377,9 @@ class Spells(ABC):
                     if path is not None else None
             if new_case is None or new_case.case_type == CaseType.WALL:
                 continue
-            if isinstance(new_case.entity, (Bolgrot, Flame)):
+            if type(new_case.entity) is Bolgrot or type(new_case.entity) is Flame:
                 continue
-            elif isinstance(new_case.entity, Player) and killable:
+            elif type(new_case.entity) is Player and killable:
                 if player is not None:
                     player.hp = 0
             elif new_case.entity is None:
@@ -396,7 +396,7 @@ class Spells(ABC):
         assert self.BFS is not None
         flame_cases = [
             case for case in cases.values()
-            if isinstance(case.entity, Flame)
+            if type(case.entity) is Flame
             and (case.x, case.y) != (player.pos_x, player.pos_y)
             and abs(case.x - player.pos_x) <= 1
             and abs(case.y - player.pos_y) <= 1
@@ -414,7 +414,7 @@ class Spells(ABC):
                 step = (case.x + sx, case.y + sy)
                 for fx, fy in ((case.x + sx, case.y), (case.x, case.y + sy)):
                     flank = cases.get((fx, fy))
-                    if flank is not None and isinstance(flank.entity, Flame):
+                    if flank is not None and type(flank.entity) is Flame:
                         player.hp = 0
             new_case = self._find_case(step, cases)
             if new_case is None or new_case.case_type == CaseType.WALL:
@@ -426,9 +426,9 @@ class Spells(ABC):
                     if path is not None else None
             if new_case is None or new_case.case_type == CaseType.WALL:
                 continue
-            if isinstance(new_case.entity, Bolgrot):
+            if type(new_case.entity) is Bolgrot:
                 continue
-            elif isinstance(new_case.entity, (Flame, Player)):
+            elif type(new_case.entity) is Flame or type(new_case.entity) is Player:
                 player.hp = 0
             elif new_case.entity is None:
                 new_case.entity = case.entity

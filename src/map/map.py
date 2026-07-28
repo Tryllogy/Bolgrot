@@ -18,6 +18,10 @@ class Map:
         map_conf: str = constant.MAP_CONF,
     ) -> None:
         """Build the map by parsing the map file at ``map_conf``."""
+        # Live set of flame positions, kept in sync by ``Case.entity``'s setter
+        # so the RL/search hot path reads flames in O(#flames) instead of
+        # scanning every cell. Shared by reference into each Case (below).
+        self.flames: set[tuple[int, int]] = set()
         self.cases: dict[tuple[int, int], Case] = {}
         self.parse_map(map_conf)
 
@@ -45,8 +49,10 @@ class Map:
                     y -= 1
                     x += 1
                     continue
-                self.cases[(x, y)] = Case(
+                case = Case(
                     x, y, case_type=SYMBOL_MAP.get(symbol, CaseType.FREE))
+                case._flames = self.flames   # share the live flame-position set
+                self.cases[(x, y)] = case
                 x += 1
                 y -= 1
             if n_line % 2 == 1:
@@ -76,7 +82,7 @@ class Map:
             case = self.cases.get((x, y))
             if case is None:
                 continue
-            if isinstance(case.entity, Player):
+            if type(case.entity) is Player:
                 return
             case.entity = entity
             return

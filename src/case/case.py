@@ -1,7 +1,7 @@
 from __future__ import annotations
 from enum import Enum
 import pygame
-from ..entity import Entity
+from ..entity import Entity, Flame
 from .. import constant
 
 
@@ -25,8 +25,30 @@ class Case:
         """Create a cell at grid (x, y) with an optional entity and type."""
         self.x = x
         self.y = y
-        self.entity: Entity | None = entity
         self.case_type: CaseType = case_type
+        # ``_flames`` is a Map-shared set of flame positions, injected by Map
+        # after construction; the ``entity`` setter keeps it in sync so callers
+        # never have to scan every cell to find the flames (the search's hot
+        # path). None until injected -> the setter is a no-op during __init__.
+        self._flames: set[tuple[int, int]] | None = None
+        self._entity: Entity | None = None
+        self.entity = entity
+
+    @property
+    def entity(self) -> Entity | None:
+        return self._entity
+
+    @entity.setter
+    def entity(self, value: Entity | None) -> None:
+        flames = self._flames
+        if flames is not None:
+            was = type(self._entity) is Flame
+            now = type(value) is Flame
+            if was and not now:
+                flames.discard((self.x, self.y))
+            elif now and not was:
+                flames.add((self.x, self.y))
+        self._entity = value
 
     def contains(
         self,

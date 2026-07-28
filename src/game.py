@@ -130,8 +130,7 @@ class Game:
         p = self.player
         return {
             "px": p.pos_x, "py": p.pos_y, "hp": p.hp, "pa": p.pa,
-            "flames": [(c.x, c.y) for c in self.map.cases.values()
-                       if isinstance(c.entity, Flame)],
+            "flames": list(self.map.flames),
             "time_used": [s.time_used for s in p.spells],
             "waves_spawned": self.waves_spawned,
             "turn": self.turn,
@@ -150,16 +149,20 @@ class Game:
     def set_state(self, state: dict) -> None:
         """Restore a snapshot produced by :meth:`get_state` (in place)."""
         p = self.player
+        # Clear the current movable occupants WITHOUT scanning every cell: the
+        # flames are tracked in ``map.flames`` and the player sits at its
+        # current (pre-restore) position. Bolgrot never moves. Snapshot the
+        # flame set first — clearing mutates it through the entity setter. The
+        # player must stay the *same* object (aliased from ``self.player``).
+        for pos in tuple(self.map.flames):
+            self.map.cases[pos].entity = None
+        cur = self.map.cases.get((p.pos_x, p.pos_y))
+        if cur is not None and cur.entity is p:
+            cur.entity = None
         p.pos_x, p.pos_y = state["px"], state["py"]
         p.hp, p.pa = state["hp"], state["pa"]
         for spell, used in zip(p.spells, state["time_used"]):
             spell.time_used = used
-        # Rebuild the movable occupants: flames and the player. Bolgrot never
-        # moves, so leave it in place; the player must stay the *same* object
-        # (it is referenced from both self.player and its cell).
-        for case in self.map.cases.values():
-            if isinstance(case.entity, (Flame, Player)):
-                case.entity = None
         for fx, fy in state["flames"]:
             self.map.cases[(fx, fy)].entity = Flame(fx, fy)
         self.map.cases[(p.pos_x, p.pos_y)].entity = p
@@ -306,15 +309,11 @@ class Game:
 
     def _occupied_tiles(self) -> set[tuple[int, int]]:
         """Tiles currently holding a flame or the player."""
-        return {
-            pos for pos, case in self.map.cases.items()
-            if isinstance(case.entity, (Flame, Player))
-        }
+        return self.map.flames | {(self.player.pos_x, self.player.pos_y)}
 
     def _flames_remain(self) -> bool:
         """Whether any flame is still on the map."""
-        return any(isinstance(case.entity, Flame)
-                   for case in self.map.cases.values())
+        return bool(self.map.flames)
 
     def _check_end(self) -> None:
         """Resolve win/loss: dead player loses; all waves cleared wins."""
@@ -330,9 +329,15 @@ class Game:
     # ------------------------------------------------------------------
 
     def _flame_positions(self) -> list[tuple[int, int]]:
-        """Grid positions of every flame currently on the map."""
-        return [pos for pos, case in self.map.cases.items()
-                if isinstance(case.entity, Flame)]
+        """Grid positions of every flame currently on the map.
+
+        Iterates cells in map order and filters by the O(1) flame set — same
+        order as the old full ``isinstance`` scan (the observation's K-nearest
+        tie-breaks on it, so the order must be byte-identical), but with a cheap
+        set-membership test instead of an ABC ``isinstance`` per cell.
+        """
+        flames = self.map.flames
+        return [pos for pos in self.map.cases if pos in flames]
 
     @staticmethod
     def _nearest_target_dist(

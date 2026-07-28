@@ -66,7 +66,7 @@ class LongJump(Spells):
         killed_flame = False
         if src is None or dst is None:
             return
-        if isinstance(dst.entity, Flame):
+        if type(dst.entity) is Flame:
             killed_flame = True
             player.hp += 1
         src.entity = None
