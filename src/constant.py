@@ -44,6 +44,26 @@ SPAWN_LINE_OFFSET = 2
 K_NEAREST_FLAMES = 8
 K_NEAREST_SPAWN = 6
 
+# Observation MODE: "flat" (the K-nearest vector above, fed to the MLP — this is
+# what az.pt and the deployment use) or "grid" (a 2D multi-channel board for a
+# CNN, full spatial observability). "grid" is an EXPERIMENT flag and is
+# INCOMPATIBLE with flat-trained nets (az.pt) — the observation length and the
+# network class both change. Keep "flat" committed; set "grid" only in a
+# working-tree experiment and NEVER deploy it (prod runs the flat az.pt).
+OBS_MODE = "flat"  # committed default = az.pt/deploy. "grid" = CNN experiment
+# flag only (set in a working tree, NEVER commit/deploy grid — it breaks az.pt).
+# Grid obs (OBS_MODE="grid"): an absolute board grid indexed [x, y], with a few
+# binary channels + a small tail of scalar features. GRID_H/W must cover every
+# cell coordinate (parsed grid_max is ~31/32; 34 leaves margin — asserted in
+# Game._grid_observation so a larger map fails loud instead of truncating).
+GRID_H = 34
+GRID_W = 34
+# Channels: 0=free-cell mask (board shape), 1=flames, 2=next-spawn tiles,
+# 3=player, 4=bolgrot.
+GRID_CHANNELS = 5
+# Scalar tail (non-spatial): hp, pa, waves_spawned, flame_count, castable_0..2.
+GRID_SCALARS = 7
+
 # Reward weights for the AI (`Game.step`). The dominant term is REWARD_CLEAR:
 # clearing flames is the only way to make real progress toward a win, and it
 # must out-earn passively ending turns. Survival is kept deliberately tiny so

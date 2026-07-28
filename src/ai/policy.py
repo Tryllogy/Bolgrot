@@ -171,16 +171,23 @@ def save_policy(net: ActorCritic, path: str) -> None:
             "num_actions": net.num_actions,
             "hidden": net.hidden,
             "value_dim": net.value_dim,
+            "net_type": getattr(net, "net_type", "mlp"),
         },
         path,
     )
 
 
 def load_policy(path: str, device: str = "cpu") -> ActorCritic:
-    """Rebuild an :class:`ActorCritic` saved by :func:`save_policy`."""
+    """Rebuild the net saved by :func:`save_policy` (MLP or CNN).
+
+    ``net_type`` defaults to ``"mlp"`` so checkpoints written before the CNN
+    existed (e.g. ``az.pt``) still load.
+    """
+    from .network import build_net
     ckpt = torch.load(path, map_location=device, weights_only=True)
-    net = ActorCritic(ckpt["obs_size"], ckpt["num_actions"], ckpt["hidden"],
-                      value_dim=ckpt.get("value_dim", 1))
+    net = build_net(ckpt["obs_size"], ckpt["num_actions"], ckpt["hidden"],
+                    value_dim=ckpt.get("value_dim", 1),
+                    net_type=ckpt.get("net_type", "mlp"))
     net.load_state_dict(ckpt["state_dict"])
     net.to(device)
     net.eval()

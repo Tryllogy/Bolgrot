@@ -141,6 +141,12 @@ def main() -> None:
                         help="MLP hidden width (raise to 128 for more "
                              "capacity; a new width needs a fresh run — it "
                              "cannot --resume a differently-sized checkpoint)")
+    parser.add_argument("--net-type", choices=("mlp", "cnn"), default="mlp",
+                        help="mlp = flat obs (az.pt/deploy). cnn = 2D grid obs "
+                             "with spatial convs; REQUIRES constant.OBS_MODE="
+                             "'grid' (a working-tree experiment flag — never "
+                             "deploy grid). Baked into the checkpoint; a cnn run "
+                             "needs a fresh --out and cannot resume an mlp one.")
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--eval-every", type=int, default=5)
     parser.add_argument("--out", default=POLICY_PATH,
@@ -171,6 +177,16 @@ def main() -> None:
     if args.value_scale is not None:
         from . import alphazero
         alphazero.VALUE_SCALE = args.value_scale
+
+    from .. import constant
+    if args.net_type == "cnn" and constant.OBS_MODE != "grid":
+        raise SystemExit(
+            "--net-type cnn requires constant.OBS_MODE='grid' (set it in "
+            "src/constant.py — a working-tree experiment flag; never deploy).")
+    if args.net_type == "mlp" and constant.OBS_MODE == "grid":
+        raise SystemExit(
+            "constant.OBS_MODE='grid' but --net-type is mlp — the flat MLP "
+            "can't read the grid obs. Use --net-type cnn or revert OBS_MODE.")
 
     if args.bootstrap_teacher == "az":
         if not args.bootstrap_teacher_path:
@@ -207,6 +223,7 @@ def main() -> None:
         nm_depth=args.nm_depth,
         nm_k=args.nm_k,
         hidden=args.hidden,
+        net_type=args.net_type,
         seed=args.seed,
         eval_every=args.eval_every,
         out_path=args.out,

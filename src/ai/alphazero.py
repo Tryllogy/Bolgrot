@@ -42,6 +42,7 @@ import random
 from collections import deque
 from dataclasses import dataclass, field
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn, optim
@@ -49,7 +50,7 @@ from torch import nn, optim
 from ..entity import Player
 from ..game import Game
 from .. import constant
-from .network import ActorCritic, MASK_FILL
+from .network import ActorCritic, MASK_FILL, build_net
 from .policy import (
     ActionFn,
     EVAL_SEEDS,
@@ -1058,6 +1059,10 @@ class AZConfig:
     nm_depth: int = 5              # negamax search depth
     nm_k: int = 4                  # negamax branching (top-k by prior)
     hidden: int = 64
+    # Network type: "mlp" (flat obs, az.pt/deploy) or "cnn" (grid obs, needs
+    # constant.OBS_MODE="grid"). Baked into the checkpoint like `hidden`, so a
+    # cnn run needs a fresh --out and cannot resume an mlp checkpoint.
+    net_type: str = "mlp"
     seed: int = 1
     eval_every: int = 5
     eval_seeds: list[int] = field(default_factory=lambda: EVAL_SEEDS[:16])
@@ -1097,6 +1102,7 @@ def _save_az_checkpoint(path: str, net: ActorCritic,
             "num_actions": net.num_actions,
             "hidden": net.hidden,
             "value_dim": net.value_dim,
+            "net_type": getattr(net, "net_type", "mlp"),
             "optimizer": optimizer.state_dict(),
             "iteration": iteration,
             "best_score": best_score,
@@ -1156,8 +1162,11 @@ def _update(net: ActorCritic, optimizer: optim.Optimizer,
         if n_win:
             batch = batch + rng.choices(win_data, k=n_win)
         dev = cfg.device
-        obs = torch.tensor([s.obs for s in batch], dtype=torch.float32,
-                           device=dev)
+        # np.asarray handles both obs layouts (flat list[float] and the grid
+        # mode's 1-D float32 array) and avoids the slow tensor-from-list-of-
+        # arrays path; result is (batch, obs_size) either way.
+        obs = torch.as_tensor(
+            np.asarray([s.obs for s in batch], dtype=np.float32), device=dev)
         mask = torch.tensor([s.mask for s in batch], dtype=torch.bool,
                             device=dev)
         pi = torch.tensor([s.pi for s in batch], dtype=torch.float32,
@@ -1204,8 +1213,8 @@ def train(cfg: AZConfig) -> ActorCritic:
     # "twohead" needs a second value output (shaped + P(win)); baked into the
     # checkpoint like `hidden`, so it cannot resume a single-head checkpoint.
     value_dim = 2 if cfg.value_mode == "twohead" else 1
-    net = ActorCritic(obs_size, num_actions, cfg.hidden,
-                      value_dim=value_dim).to(cfg.device)
+    net = build_net(obs_size, num_actions, cfg.hidden,
+                    value_dim=value_dim, net_type=cfg.net_type).to(cfg.device)
     optimizer = optim.Adam(net.parameters(), lr=cfg.learning_rate,
                            weight_decay=cfg.weight_decay)
 
@@ -1221,7 +1230,8 @@ def train(cfg: AZConfig) -> ActorCritic:
         if (ckpt["obs_size"] != obs_size
                 or ckpt["num_actions"] != num_actions
                 or ckpt.get("hidden") != cfg.hidden
-                or ckpt.get("value_dim", 1) != value_dim):
+                or ckpt.get("value_dim", 1) != value_dim
+                or ckpt.get("net_type", "mlp") != cfg.net_type):
             raise SystemExit("Checkpoint shape mismatch — train fresh.")
         net.load_state_dict(ckpt["state_dict"])
         if "optimizer" in ckpt:

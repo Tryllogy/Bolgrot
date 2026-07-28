@@ -375,6 +375,51 @@ class Game:
                 out.extend((0.0, 0.0, 0.0))
         return out
 
+    def _grid_observation(self):
+        """Return the ``OBS_MODE == "grid"`` observation for a CNN.
+
+        A flat ``float32`` numpy array = ``GRID_CHANNELS`` binary board planes
+        (``H*W`` each, indexed ``[x, y]``) followed by ``GRID_SCALARS`` scalar
+        features. Channels: 0=free-cell mask, 1=flames, 2=next-spawn tiles,
+        3=player, 4=bolgrot. Returned flat (the CNN reshapes) so the replay
+        buffer, masking and batching stay identical to the flat path.
+
+        Stored as numpy (not ``list[float]``) because a ``C*H*W`` Python list
+        per sample would blow the replay buffer to ~10 GB; float32 keeps it
+        ~1.4 GB.
+        """
+        import numpy as np
+        H, W, C = constant.GRID_H, constant.GRID_W, constant.GRID_CHANNELS
+        plane = H * W
+        grid = np.zeros(C * plane + constant.GRID_SCALARS, dtype=np.float32)
+
+        def _set(channel: int, x: int, y: int) -> None:
+            if 0 <= x < H and 0 <= y < W:
+                grid[channel * plane + x * W + y] = 1.0
+            elif channel != 0:  # a live entity must fit; the free-mask may not
+                raise ValueError(
+                    f"grid cell ({x},{y}) outside {H}x{W} — raise GRID_H/W")
+
+        for (x, y), case in self.map.cases.items():
+            if case.case_type == CaseType.FREE and 0 <= x < H and 0 <= y < W:
+                grid[x * W + y] = 1.0                      # channel 0: free
+        for x, y in self._flame_positions():
+            _set(1, x, y)
+        for x, y in self.spawn_pattern:
+            _set(2, x, y)
+        _set(3, self.player.pos_x, self.player.pos_y)
+        _set(4, self.bolgrot.pos_x, self.bolgrot.pos_y)
+
+        p = self.player
+        tail = C * plane
+        grid[tail + 0] = p.hp / constant.MAX_HP
+        grid[tail + 1] = p.pa / p.base_PA if p.base_PA else 0.0
+        grid[tail + 2] = self.waves_spawned / self.num_waves
+        grid[tail + 3] = len(self._flame_positions()) / 20.0
+        for i, spell in enumerate(p.spells[:3]):
+            grid[tail + 4 + i] = 1.0 if spell.is_castable(p) else 0.0
+        return grid
+
     def get_observation(self) -> list[float]:
         """Return the fixed-length float vector fed to the neural network.
 
@@ -384,7 +429,12 @@ class Game:
         ``K_NEAREST_FLAMES`` nearest flames and ``K_NEAREST_SPAWN`` nearest
         next-spawn tiles, each as ``(present, dx, dy)``. All values are
         normalised to roughly ``[-1, 1]``.
+
+        When ``constant.OBS_MODE == "grid"`` this instead returns the 2D
+        multi-channel board (:meth:`_grid_observation`) for a CNN.
         """
+        if constant.OBS_MODE == "grid":
+            return self._grid_observation()
         p = self.player
         gx = self.map.grid_max_x or 1
         gy = self.map.grid_max_y or 1
@@ -411,6 +461,9 @@ class Game:
     @staticmethod
     def observation_size() -> int:
         """Length of the vector returned by :meth:`get_observation`."""
+        if constant.OBS_MODE == "grid":
+            return (constant.GRID_CHANNELS * constant.GRID_H * constant.GRID_W
+                    + constant.GRID_SCALARS)
         return (11 + 3 * constant.K_NEAREST_FLAMES
                 + 3 * constant.K_NEAREST_SPAWN)
 
