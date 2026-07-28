@@ -6,6 +6,7 @@ import {
   playAction,
   descLines,
   sims,
+  netEngine,
   askHint,
   hintLoading,
   autoplay,
@@ -61,6 +62,13 @@ import {
       </div>
     </div>
     <div class="actions">
+      <label class="budget">
+        Moteur
+        <select v-model="netEngine">
+          <option value="az">Rapide</option>
+          <option value="cnn">Fort</option>
+        </select>
+      </label>
       <label class="budget">
         Budget IA
         <select v-model.number="sims">

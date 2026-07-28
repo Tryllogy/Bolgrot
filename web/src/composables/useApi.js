@@ -24,6 +24,7 @@ export const api = {
   customGame: (spawns) => jpost("/games/custom", { spawns }),
   legal: (id) => jget(`/games/${id}/legal`),
   step: (id, index) => jpost(`/games/${id}/step?action_index=${index}`),
-  hint: (id, sims) => jpost(`/games/${id}/hint?sims=${sims}`),
+  hint: (id, sims, engine = "az") =>
+    jpost(`/games/${id}/hint?sims=${sims}&engine=${engine}`),
   setSpawn: (id, tiles) => jpost(`/games/${id}/spawn`, { tiles }),
 };

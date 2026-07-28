@@ -20,6 +20,7 @@ export const hint = ref(null);
 export const hintLoading = ref(false);
 export const selectedSpell = ref(null);
 export const sims = ref(1000);
+export const netEngine = ref("az"); // moteur IA : "az" (rapide) | "cnn" (fort)
 export const autoplay = ref(false);
 export const currentSeed = ref(null);
 export const solving = ref(false);
@@ -319,7 +320,7 @@ export async function newGame() {
 
 export async function askHint() {
   hintLoading.value = true;
-  hint.value = await api.hint(state.value.game_id, sims.value);
+  hint.value = await api.hint(state.value.game_id, sims.value, netEngine.value);
   hintLoading.value = false;
   showToast(`Indice : ${moveLabel(hint.value)}`);
   render();
@@ -330,7 +331,7 @@ export async function askHint() {
 // éteindre autoplay, et submitSpawn la relance après la pose de la vague.
 async function runAutoplay() {
   while (autoplay.value && !view.value.done && screen.value === "play") {
-    const h = await api.hint(state.value.game_id, sims.value);
+    const h = await api.hint(state.value.game_id, sims.value, netEngine.value);
     showToast(`${moveLabel(h)}`);
     await playAction(h.index);
     await new Promise((res) => setTimeout(res, 300));
@@ -346,7 +347,7 @@ export async function toggleAutoplay() {
 async function solveOnce(budget) {
   await startGame(currentSeed.value);
   while (!view.value.done) {
-    const h = await api.hint(state.value.game_id, budget);
+    const h = await api.hint(state.value.game_id, budget, netEngine.value);
     showToast(`${moveLabel(h)}`);
     await playAction(h.index);
     await new Promise((res) => setTimeout(res, 150));

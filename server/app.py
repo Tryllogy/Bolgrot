@@ -24,41 +24,47 @@ MAP_CELLS = [{"x": c.x, "y": c.y} for c in _ref_game.map.cases.values()]
 # The AZ search is CPU-bound pure-Python => the GIL serialises it. We run it in
 # separate processes (each has its own GIL / core) so concurrent hints don't
 # queue behind each other and the async event loop is never blocked.
-_WORKER_NET = None   # one net copy per worker process
+# Two hint engines the frontend can pick between: "az" — the flat MLP az.pt,
+# fast (a hint's cost is dominated by single-threaded Python game-stepping, and
+# the MLP forward is tiny); "cnn" — the grid CNN az_cnn_final, stronger per sim
+# but ~4x slower in prod (the heavier conv can't hide behind the GIL-bound
+# stepping and doesn't parallelise). Each worker holds BOTH so a request just
+# names one. Paths overridable by env for a future swap.
+_ENGINE_PATHS = {
+    "az": os.environ.get("BOLGROT_HINT_NET", "src/ai/az.pt"),
+    "cnn": os.environ.get("BOLGROT_HINT_NET_CNN", "src/ai/az_cnn_final.pt"),
+}
+_WORKER_NETS: dict = {}   # {engine: net} — one copy per worker process
 
 
 def _worker_init():
-    """Runs once when a worker process starts: load the hint net a single time.
-
-    The net is configurable via ``BOLGROT_HINT_NET`` (default the flat MLP
-    ``az.pt``) so a deploy can switch nets without a code change. The observation
-    layout MUST match the net — a CNN needs the 2D grid, the MLP the flat vector
-    — so we force ``constant.OBS_MODE`` from the loaded net's own ``net_type``,
-    making a mismatch (the grid-9255 vs 53x64 mat-mul crash) impossible whatever
-    the env/OBS_MODE says.
-    """
+    """Runs once when a worker process starts: load both hint nets a single time."""
     import os
     os.environ["SDL_VIDEODRIVER"] = "dummy"
     from src.ai.policy import load_policy
-    from src import constant
-    global _WORKER_NET
-    _WORKER_NET = load_policy(
-        os.environ.get("BOLGROT_HINT_NET", "src/ai/az.pt"))
-    constant.OBS_MODE = (
-        "grid" if getattr(_WORKER_NET, "net_type", "mlp") == "cnn" else "flat")
+    global _WORKER_NETS
+    _WORKER_NETS = {k: load_policy(p) for k, p in _ENGINE_PATHS.items()}
 
 
-def _worker_hint(state_dict: dict, num_waves: int, sims: int) -> int:
+def _worker_hint(state_dict: dict, num_waves: int, sims: int,
+                 engine: str = "az") -> int:
     """Reconstruct the game from a picklable state and return the AZ best move.
 
     ``num_waves`` is passed explicitly because ``get_state`` does not carry it;
     a custom puzzle uses ``num_waves=1`` and the worker must match, or the
-    search would keep spawning waves and never see the win.
+    search would keep spawning waves and never see the win. The obs layout MUST
+    match the chosen net (a CNN needs the 2D grid, the MLP the flat vector), so
+    we set ``constant.OBS_MODE`` from the net's own ``net_type`` before the
+    search — safe because a worker runs one task at a time (no OBS_MODE race).
     """
     from src.ai.alphazero import az_action_fn
+    from src import constant
+    net = _WORKER_NETS.get(engine) or _WORKER_NETS["az"]
+    constant.OBS_MODE = (
+        "grid" if getattr(net, "net_type", "mlp") == "cnn" else "flat")
     game = Game(Player(*constant.BASE_PLAYER_POS), num_waves=num_waves)
     game.set_state(state_dict)
-    return az_action_fn(_WORKER_NET, simulations=sims)(game)
+    return az_action_fn(net, simulations=sims)(game)
 
 
 _POOL: ProcessPoolExecutor | None = None
@@ -273,12 +279,12 @@ def legal(game_id: str) -> dict:
 
 
 @app.post("/games/{game_id}/hint")
-async def hint(game_id: str, sims: int = 1000) -> dict:
+async def hint(game_id: str, sims: int = 1000, engine: str = "az") -> dict:
     game = _get_game(game_id)
     state_dict = game.get_state()
     loop = asyncio.get_running_loop()
     index = await loop.run_in_executor(
-        _POOL, _worker_hint, state_dict, game.num_waves, sims)
+        _POOL, _worker_hint, state_dict, game.num_waves, sims, engine)
     spell_index, (dx, dy) = Game.ACTIONS[index]
     return {"index": index, "spell": spell_index, "dx": dx, "dy": dy}
 

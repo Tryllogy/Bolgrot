@@ -23,12 +23,23 @@ import { startRandom, openEditor } from "../composables/useGame.js";
       chaque partie. Sur un niveau perdu, « Réessayer plus fort » la relance avec
       plus de réflexion (elle finit par gagner en cherchant plus profond).
     </p>
-    <p class="disclaimer">
-      <b>
-        Attention : augmenter les sims augmente le temps de calcul (~1 s / 1000
-        sims).
-      </b>
-    </p>
+    <div class="disclaimer">
+      <b>Deux moteurs d'IA</b> — « Rapide » (léger) ou « Fort » (plus précis mais
+      nettement plus lent). Temps de calcul par coup et taux de victoire de l'IA
+      sur le jeu complet, selon le budget de simulations :
+      <table class="perf">
+        <thead>
+          <tr><th>Budget</th><th>Rapide</th><th>Fort</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>300</td><td>50 % · ~0,5 s</td><td>70 % · ~2 s</td></tr>
+          <tr><td>1000</td><td>73 % · ~1,7 s</td><td>84 % · ~7 s</td></tr>
+          <tr><td>8000</td><td>~90 % · ~13 s</td><td>~95 % · ~55 s</td></tr>
+        </tbody>
+      </table>
+      <span class="perf-note">Mesuré en prod (2 vCPU). Le « Fort » cherche mieux
+      par simulation mais chaque coup coûte ~4× plus de temps.</span>
+    </div>
   </section>
 </template>
 
@@ -62,5 +73,26 @@ import { startRandom, openEditor } from "../composables/useGame.js";
   line-height: 1.6;
   max-width: 560px;
   margin: 0 auto;
+}
+.perf {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+.perf th,
+.perf td {
+  border: 1px solid var(--border);
+  padding: 5px 10px;
+  text-align: center;
+}
+.perf th {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+.perf-note {
+  display: block;
+  font-size: 0.75rem;
+  opacity: 0.8;
 }
 </style>
