@@ -1,3 +1,4 @@
+import os
 from importlib.resources import files
 
 # 37
@@ -50,8 +51,14 @@ K_NEAREST_SPAWN = 6
 # INCOMPATIBLE with flat-trained nets (az.pt) — the observation length and the
 # network class both change. Keep "flat" committed; set "grid" only in a
 # working-tree experiment and NEVER deploy it (prod runs the flat az.pt).
-OBS_MODE = "flat"  # committed default = az.pt/deploy. "grid" = CNN experiment
-# flag only (set in a working tree, NEVER commit/deploy grid — it breaks az.pt).
+# Overridable by the BOLGROT_OBS_MODE env var so the deployment/hint server and
+# a CNN training run can coexist from the SAME checkout (they share this module):
+# the committed default is "flat" (az.pt / prod hint — a deploy is always safe),
+# and a grid-CNN experiment sets BOLGROT_OBS_MODE=grid in its OWN launch env. The
+# env var is inherited by spawn workers (unlike a runtime module global), so
+# training workers see grid while a server started without the var sees flat.
+# NEVER deploy with BOLGROT_OBS_MODE=grid — grid obs (CNN) breaks the flat az.pt.
+OBS_MODE = os.environ.get("BOLGROT_OBS_MODE", "flat")
 # Grid obs (OBS_MODE="grid"): an absolute board grid indexed [x, y], with a few
 # binary channels + a small tail of scalar features. GRID_H/W must cover every
 # cell coordinate (parsed grid_max is ~31/32; 34 leaves margin — asserted in

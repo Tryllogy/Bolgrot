@@ -28,12 +28,24 @@ _WORKER_NET = None   # one net copy per worker process
 
 
 def _worker_init():
-    """Runs once when a worker process starts: load az.pt a single time."""
+    """Runs once when a worker process starts: load the hint net a single time.
+
+    The net is configurable via ``BOLGROT_HINT_NET`` (default the flat MLP
+    ``az.pt``) so a deploy can switch nets without a code change. The observation
+    layout MUST match the net — a CNN needs the 2D grid, the MLP the flat vector
+    — so we force ``constant.OBS_MODE`` from the loaded net's own ``net_type``,
+    making a mismatch (the grid-9255 vs 53x64 mat-mul crash) impossible whatever
+    the env/OBS_MODE says.
+    """
     import os
     os.environ["SDL_VIDEODRIVER"] = "dummy"
     from src.ai.policy import load_policy
+    from src import constant
     global _WORKER_NET
-    _WORKER_NET = load_policy("src/ai/az.pt")
+    _WORKER_NET = load_policy(
+        os.environ.get("BOLGROT_HINT_NET", "src/ai/az.pt"))
+    constant.OBS_MODE = (
+        "grid" if getattr(_WORKER_NET, "net_type", "mlp") == "cnn" else "flat")
 
 
 def _worker_hint(state_dict: dict, num_waves: int, sims: int) -> int:

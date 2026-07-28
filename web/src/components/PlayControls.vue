@@ -10,6 +10,8 @@ import {
   hintLoading,
   autoplay,
   toggleAutoplay,
+  turnClock,
+  turnLow,
 } from "../composables/useGame.js";
 </script>
 
@@ -53,7 +55,10 @@ import {
           <span v-if="sp.effects.length" class="tt-effects">{{ sp.effects.join(" · ") }}</span>
         </span>
       </div>
-      <button class="end-turn" @click="playAction(16)">Fin de tour</button>
+      <div class="end-turn-wrap">
+        <button class="end-turn" @click="playAction(16)">Fin de tour</button>
+        <span class="turn-timer" :class="{ low: turnLow }">{{ turnClock }}</span>
+      </div>
     </div>
     <div class="actions">
       <label class="budget">
@@ -127,9 +132,28 @@ import {
   justify-content: center;
   align-items: center;
 }
-.end-turn {
+.end-turn-wrap {
   margin-left: 104px; /* espacement d'une largeur de sort */
   align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+.turn-timer {
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-strong);
+}
+.turn-timer.low {
+  color: #e0554b;
+  animation: time-pulse 1s steps(2, start) infinite;
+}
+@keyframes time-pulse {
+  50% {
+    opacity: 0.45;
+  }
 }
 .spell-slot {
   position: relative;

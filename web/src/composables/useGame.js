@@ -1,4 +1,4 @@
-import { ref, nextTick } from "vue";
+import { ref, computed, nextTick } from "vue";
 import { api } from "./useApi.js";
 import { useBoard } from "./useBoard.js";
 
@@ -27,6 +27,16 @@ export const solveBudget = ref(null);
 export const hover = ref(null); // case sous le curseur {x, y} ou null
 export const toast = ref(null); // texte éphémère (coup joué par l'IA)
 let toastTimer = null;
+
+// Compte à rebours du tour : 1 tour = 2 min (comme le jeu de base, TIME_TURN).
+const TURN_SECONDS = 120;
+export const turnTime = ref(TURN_SECONDS); // secondes restantes sur le tour
+let turnInterval = null;
+export const turnClock = computed(() => {
+  const t = Math.max(0, turnTime.value);
+  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+});
+export const turnLow = computed(() => turnTime.value <= 15); // alerte fin de tour
 export const screen = ref("home"); // "home" | "play" | "editor"
 export const basePlayer = ref(null); // [x, y] départ joueur
 export const baseBolgrot = ref(null); // [x, y] Bolgrot
@@ -162,10 +172,43 @@ export function onCanvasLeave() {
   }
 }
 
+// Le timer ne tourne que pendant une partie jouée à la main : pas sur l'accueil
+// ni l'éditeur, pas quand la partie est finie, et pas pendant l'IA (autoplay /
+// résolution) qui enchaîne les tours elle-même.
+function turnTimerActive() {
+  return (
+    screen.value === "play" &&
+    !!view.value &&
+    !view.value.done &&
+    !autoplay.value &&
+    !solving.value
+  );
+}
+
+// Un seul intervalle, monté une fois (voir init), gardé par turnTimerActive.
+// À 0 : fin de tour automatique (une nouvelle vague apparaît), puis on repart à
+// 120 s. Le temps n'est PAS remis à zéro par les actions individuelles — les
+// 2 min sont le budget de tout le tour ; seule une fin de tour (manuelle ou
+// automatique) le relance. On repart à 120 AVANT le playAction asynchrone pour
+// que le tick suivant ne déclenche pas une deuxième fin de tour.
+function ensureTurnTimer() {
+  if (turnInterval) return;
+  turnInterval = setInterval(async () => {
+    if (!turnTimerActive()) return;
+    if (turnTime.value > 0) {
+      turnTime.value -= 1;
+    } else {
+      turnTime.value = TURN_SECONDS;
+      await playAction(16);
+    }
+  }, 1000);
+}
+
 export async function playAction(index) {
   hint.value = null;
   const data = await api.step(state.value.game_id, index);
   view.value = data.state;
+  if (index === 16) turnTime.value = TURN_SECONDS; // fin de tour → nouveau tour
   selectedSpell.value = null;
   await fetchLegal();
   render();
@@ -186,6 +229,7 @@ function applyGame(data) {
   selectedSpell.value = null;
   hint.value = null;
   autoplay.value = false;
+  turnTime.value = TURN_SECONDS; // nouvelle partie → tour plein
 }
 
 async function startGame(seed = null) {
@@ -328,4 +372,5 @@ export async function init() {
   basePlayer.value = md.player;
   baseBolgrot.value = md.bolgrot;
   fitBoard(cells.value.cells);
+  ensureTurnTimer(); // démarre le compte à rebours de tour (gardé par l'état)
 }
