@@ -32,9 +32,9 @@ import { startRandom, openEditor } from "../composables/useGame.js";
           <tr><th>Budget</th><th>Rapide</th><th>Fort</th></tr>
         </thead>
         <tbody>
-          <tr><td>300</td><td>50 % · ~0,5 s</td><td>70 % · ~2 s</td></tr>
-          <tr><td>1000</td><td>73 % · ~1,7 s</td><td>84 % · ~7 s</td></tr>
-          <tr><td>8000</td><td>~90 % · ~13 s</td><td>~95 % · ~55 s</td></tr>
+          <tr><td>300</td><td>50 % · ~0,3 s</td><td>77 % · ~1,2 s</td></tr>
+          <tr><td>1000</td><td>73 % · ~0,9 s</td><td>94 % · ~4 s</td></tr>
+          <tr><td>8000</td><td>~90 % · ~8 s</td><td>~95 % · ~34 s</td></tr>
         </tbody>
       </table>
       <span class="perf-note">Mesuré en prod (2 vCPU). Le « Fort » cherche mieux
