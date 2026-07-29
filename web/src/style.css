@@ -1,3 +1,14 @@
+/* Inter auto-hébergée (sous-ensemble latin, police variable 100-900 : un seul
+   woff2 pour tous les poids). Évite la requête bloquante vers Google Fonts.
+   Source : @fontsource-variable/inter · licence SIL Open Font 1.1. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url(/fonts/inter-latin-wght-normal.woff2) format('woff2');
+}
+
 :root {
   /* light */
   --bg: #fbfbfa;
@@ -5,11 +16,14 @@
   --surface-2: #f4f4f3;
   --border: #e7e7e4;
   --border-strong: #d6d6d2;
-  --text: #6b6f76;
+  /* --text/--accent assombris pour passer le contraste WCAG AA (4.5:1) : texte
+     gris sur fond/carte, et texte blanc sur les boutons accent (l'orange clair
+     d'origine tombait à 3.46:1). Reste dans la même famille de teintes. */
+  --text: #565a61;
   --text-strong: #16181d;
-  --accent: #c07a2e;
+  --accent: #a8641a;
   --accent-contrast: #ffffff;
-  --accent-soft: rgba(192, 122, 46, 0.1);
+  --accent-soft: rgba(168, 100, 26, 0.1);
   --board-bg: #0f1218;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 12px 30px -14px rgba(0, 0, 0, 0.18);
   --radius: 10px;

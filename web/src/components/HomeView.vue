@@ -114,7 +114,6 @@ import { startRandom, openEditor } from "../composables/useGame.js";
 .perf-note {
   display: block;
   font-size: 0.75rem;
-  opacity: 0.8;
 }
 .download {
   max-width: 560px;
@@ -148,7 +147,7 @@ import { startRandom, openEditor } from "../composables/useGame.js";
   padding: 12px 26px;
   border-radius: 10px;
   background: var(--accent, #3a7ca5);
-  color: #fff;
+  color: var(--accent-contrast);
   font-size: 1.05rem;
   font-weight: 700;
   text-decoration: none;
@@ -160,7 +159,7 @@ import { startRandom, openEditor } from "../composables/useGame.js";
   display: block;
   margin-top: 10px;
   font-size: 0.75rem;
-  opacity: 0.75;
+  color: var(--text);
 }
 .download-hint code {
   font-family: monospace;
@@ -174,9 +173,8 @@ import { startRandom, openEditor } from "../composables/useGame.js";
   color: var(--text);
   font-size: 0.8125rem;
   text-decoration: underline;
-  opacity: 0.85;
 }
 .download-src:hover {
-  opacity: 1;
+  color: var(--text-strong);
 }
 </style>

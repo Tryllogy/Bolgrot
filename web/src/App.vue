@@ -10,7 +10,7 @@ onMounted(init);
 </script>
 
 <template>
-  <div class="wrap">
+  <main class="wrap">
     <HomeView v-if="screen === 'home'" />
 
     <template v-else>
@@ -23,7 +23,7 @@ onMounted(init);
       <PlayControls v-if="screen === 'play'" />
       <GameBoard />
     </template>
-  </div>
+  </main>
 </template>
 
 <style scoped>

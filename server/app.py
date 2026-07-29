@@ -13,6 +13,7 @@ from src.case.case import CaseType
 from src import constant
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
 from uuid import uuid4
 
@@ -84,11 +85,33 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+# Compression gzip de toutes les réponses (HTML/JS/CSS/JSON) : le bundle JS passe
+# de ~84 ko à ~30 ko. Firebase Hosting proxifie tel quel, donc la compression
+# doit venir d'ici (StaticFiles ne compresse pas).
+app.add_middleware(GZipMiddleware, minimum_size=500)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
     allow_methods=["*"]
 )
+
+
+@app.middleware("http")
+async def _cache_headers(request, call_next):
+    # Politique de cache pour les assets statiques (StaticFiles n'en pose aucune,
+    # d'où le `cache-control: private` par défaut que PageSpeed pénalise). Les
+    # fichiers sous /assets/ sont hashés par Vite (immuables) → cache 1 an ; les
+    # images/sprites/favicon → 1 jour. index.html et l'API ne sont pas touchés
+    # (HTML doit rester frais pour référencer les nouveaux assets après déploie).
+    resp = await call_next(request)
+    path = request.url.path
+    if path.startswith("/assets/"):
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif path.endswith((".woff2", ".woff")):
+        resp.headers["Cache-Control"] = "public, max-age=2592000, immutable"
+    elif path.endswith((".png", ".svg", ".ico", ".webp", ".jpg")):
+        resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
 # --- Sessions : source de vérité rejouable + cache mémoire ------------------
 # Le jeu est DÉTERMINISTE : une partie est entièrement définie par sa seed et la
 # suite ordonnée d'événements (coups joués + vagues dessinées en mode perso).

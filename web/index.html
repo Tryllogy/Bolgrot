@@ -32,11 +32,14 @@
     <meta name="twitter:image" content="https://bolgrot.web.app/og-image.png" />
     <meta name="twitter:image:alt" content="Le jeu Bolgrot : plateau isométrique avec joueur, boss et flammes." />
 
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Police Inter auto-hébergée (même origine) : préchargée pour éviter tout
+         blocage du rendu. Le @font-face est dans src/style.css. -->
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      href="/fonts/inter-latin-wght-normal.woff2"
+      crossorigin
     />
     <title>Bolgrot — Solveur</title>
 
