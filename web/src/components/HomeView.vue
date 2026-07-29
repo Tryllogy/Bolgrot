@@ -44,18 +44,21 @@ import { startRandom, openEditor } from "../composables/useGame.js";
       <div class="download-icon">🖥️</div>
       <h2>Téléchargement</h2>
       <p>
-        Récupérez la version bureau : un mode où vous placez vous-même les
-        flammes, et l'IA en local (indices &amp; autoplay depuis les sources).
-        Les performances de calcul de l'IA y seront plus élevées et rapides.
+        Récupérez la version bureau : l'IA embarquée en local (indices &amp;
+        autoplay hors-ligne, calcul plus rapide qu'en ligne) et un mode où vous
+        placez vous-même les flammes.
       </p>
       <a class="download-btn"
-         href="https://github.com/Tryllogy/Bolgrot-Solver/releases/latest/download/bolgrot-windows.exe">
-        ⬇ Télécharger pour Windows (.exe)
+         href="https://github.com/Tryllogy/Bolgrot-Solver/releases/latest/download/bolgrot-windows.zip">
+        ⬇ Télécharger pour Windows (.zip)
       </a>
+      <span class="download-hint">
+        ≈ 170 Mo — décompressez, puis lancez <code>bolgrot.exe</code>.
+      </span>
       <a class="download-src"
-         href="https://github.com/Tryllogy/Bolgrot-Solver"
+         href="https://github.com/Tryllogy/Bolgrot-Solver/releases/latest"
          target="_blank" rel="noopener noreferrer">
-        Code source &amp; versions Linux / macOS sur GitHub
+        Versions Linux / macOS &amp; code source sur GitHub
       </a>
     </div>
   </section>
@@ -152,6 +155,18 @@ import { startRandom, openEditor } from "../composables/useGame.js";
 }
 .download-btn:hover {
   filter: brightness(1.08);
+}
+.download-hint {
+  display: block;
+  margin-top: 10px;
+  font-size: 0.75rem;
+  opacity: 0.75;
+}
+.download-hint code {
+  font-family: monospace;
+  background: color-mix(in srgb, var(--text-strong) 12%, transparent);
+  padding: 1px 5px;
+  border-radius: 4px;
 }
 .download-src {
   display: block;
