@@ -26,13 +26,14 @@ MAP_CELLS = [{"x": c.x, "y": c.y} for c in _ref_game.map.cases.values()]
 # queue behind each other and the async event loop is never blocked.
 # Two hint engines the frontend can pick between: "az" — the flat MLP az.pt,
 # fast (a hint's cost is dominated by single-threaded Python game-stepping, and
-# the MLP forward is tiny); "cnn" — the grid CNN az_cnn_final, stronger per sim
-# but ~4x slower in prod (the heavier conv can't hide behind the GIL-bound
-# stepping and doesn't parallelise). Each worker holds BOTH so a request just
-# names one. Paths overridable by env for a future swap.
+# the MLP forward is tiny); "cnn" — the grid CNN az_cnn_deep (deeper-self-play
+# net, 60/64 held-out @1000 vs az_cnn_final's 54/64 — best at every budget, same
+# archi so same latency), stronger per sim but ~4x slower in prod (the heavier
+# conv can't hide behind the GIL-bound stepping and doesn't parallelise). Each
+# worker holds BOTH so a request just names one. Paths overridable by env.
 _ENGINE_PATHS = {
     "az": os.environ.get("BOLGROT_HINT_NET", "src/ai/az.pt"),
-    "cnn": os.environ.get("BOLGROT_HINT_NET_CNN", "src/ai/az_cnn_final.pt"),
+    "cnn": os.environ.get("BOLGROT_HINT_NET_CNN", "src/ai/az_cnn_deep.pt"),
 }
 _WORKER_NETS: dict = {}   # {engine: net} — one copy per worker process
 

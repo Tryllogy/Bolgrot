@@ -10,6 +10,7 @@ src/ai/az*.pt
 !src/ai/az.pt
 !src/ai/az_deep2.pt
 !src/ai/az_cnn_final.pt
+!src/ai/az_cnn_deep.pt
 src/ai/*.winbuf
 # Session scratchpad snapshots (analysis logs, diagnostic scripts, model backups)
 tmp/
