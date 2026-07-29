@@ -44,13 +44,17 @@ import { startRandom, openEditor } from "../composables/useGame.js";
       <div class="download-icon">🖥️</div>
       <h2>Jouer hors ligne</h2>
       <p>
-        Récupérez la version bureau (jeu Python / pygame) avec les indices &amp;
-        l'autoplay de l'IA, et un mode où vous placez vous-même les flammes.
+        Récupérez la version bureau : un mode où vous placez vous-même les
+        flammes, et l'IA en local (indices &amp; autoplay depuis les sources).
       </p>
       <a class="download-btn"
+         href="https://github.com/Tryllogy/Bolgrot-Solver/releases/latest/download/bolgrot-windows.exe">
+        ⬇ Télécharger pour Windows (.exe)
+      </a>
+      <a class="download-src"
          href="https://github.com/Tryllogy/Bolgrot-Solver"
          target="_blank" rel="noopener noreferrer">
-        ⬇ Télécharger sur GitHub
+        Code source &amp; versions Linux / macOS sur GitHub
       </a>
     </div>
   </section>
@@ -147,5 +151,16 @@ import { startRandom, openEditor } from "../composables/useGame.js";
 }
 .download-btn:hover {
   filter: brightness(1.08);
+}
+.download-src {
+  display: block;
+  margin-top: 14px;
+  color: var(--text);
+  font-size: 0.8125rem;
+  text-decoration: underline;
+  opacity: 0.85;
+}
+.download-src:hover {
+  opacity: 1;
 }
 </style>
