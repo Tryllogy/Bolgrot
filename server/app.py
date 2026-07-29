@@ -13,7 +13,7 @@ from src.case.case import CaseType
 from src import constant
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from uuid import uuid4
 
 _ref_game = Game(Player(*constant.BASE_PLAYER_POS))
@@ -183,7 +183,34 @@ def create_game(seed: int | None = None) -> dict:
     SESSIONS[id_game] = Session(seed=seed)
     game = _build_game(SESSIONS[id_game])  # live == chemin de rejeu (cohérence)
     _CACHE[id_game] = game
-    return {"game_id": id_game, "state": view(game)}
+    # `seed` est renvoyée pour que le client garde sa propre copie de la session
+    # (seed + événements) et puisse la faire rejouer via /games/restore si cette
+    # instance perd sa mémoire (scale-to-zero, redéploiement, autre instance).
+    return {"game_id": id_game, "seed": seed, "state": view(game)}
+
+
+class RestoreSession(BaseModel):
+    # Session complète détenue par le client, rejouée pour reconstruire un jeu
+    # perdu côté serveur. Mêmes champs que `Session` (source de vérité).
+    seed: int
+    is_custom: bool = False
+    initial_spawns: list | None = None
+    events: list = Field(default_factory=list)
+
+
+@app.post("/games/restore")
+def restore_game(body: RestoreSession) -> dict:
+    # Reconstruit un jeu depuis la session que le client a conservée. Sert de
+    # filet quand un game_id 404 (l'instance qui l'avait créé n'existe plus).
+    # Le jeu étant déterministe, le rejeu redonne exactement le même état.
+    id_game = uuid4().hex
+    s = Session(
+        seed=body.seed, is_custom=body.is_custom,
+        initial_spawns=body.initial_spawns, events=list(body.events))
+    SESSIONS[id_game] = s
+    game = _build_game(s)
+    _CACHE[id_game] = game
+    return {"game_id": id_game, "seed": body.seed, "state": view(game)}
 
 
 @app.get("/games/{game_id}")
@@ -247,7 +274,7 @@ def create_custom_game(body: CustomGame) -> dict:
         initial_spawns=[list(t) for t in spawns])
     game = _build_game(SESSIONS[id_game])
     _CACHE[id_game] = game
-    return {"game_id": id_game, "state": view(game)}
+    return {"game_id": id_game, "seed": seed, "state": view(game)}
 
 
 class SpawnTiles(BaseModel):

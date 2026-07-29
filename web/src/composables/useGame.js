@@ -51,8 +51,33 @@ export function setCanvas(el) {
   canvas_ref.value = el;
 }
 
+// Copie client de la session (seed + événements ordonnés), miroir exact de la
+// source de vérité côté serveur. Le jeu étant déterministe, elle suffit à
+// reconstruire la partie si le serveur perd son état (scale-to-zero, redéploie-
+// ment, ou requête tombée sur une autre instance) → le game_id renvoie 404.
+let sessionLog = null;
+
+// Exécute un appel API dépendant du game_id ; sur un 404 (partie perdue côté
+// serveur), rejoue la session pour obtenir un nouveau game_id puis réessaie une
+// fois. Transparent pour l'utilisateur : la partie continue au même état.
+async function withGame(call) {
+  try {
+    return await call(state.value.game_id);
+  } catch (e) {
+    if (!e?.notFound || !sessionLog) throw e;
+    const data = await api.restore({
+      seed: sessionLog.seed,
+      is_custom: sessionLog.isCustom,
+      initial_spawns: sessionLog.initialSpawns,
+      events: sessionLog.events,
+    });
+    state.value = { ...state.value, game_id: data.game_id };
+    return await call(state.value.game_id);
+  }
+}
+
 async function fetchLegal() {
-  legal.value = await api.legal(state.value.game_id);
+  legal.value = await withGame((id) => api.legal(id));
 }
 
 export function render() {
@@ -207,7 +232,8 @@ function ensureTurnTimer() {
 
 export async function playAction(index) {
   hint.value = null;
-  const data = await api.step(state.value.game_id, index);
+  const data = await withGame((id) => api.step(id, index));
+  sessionLog?.events.push(["step", index]); // miroir de SESSIONS côté serveur
   view.value = data.state;
   if (index === 16) turnTime.value = TURN_SECONDS; // fin de tour → nouveau tour
   selectedSpell.value = null;
@@ -224,13 +250,20 @@ export async function playAction(index) {
   }
 }
 
-function applyGame(data) {
+function applyGame(data, { isCustom = false, initialSpawns = null } = {}) {
   state.value = data;
   view.value = data.state;
   selectedSpell.value = null;
   hint.value = null;
   autoplay.value = false;
   turnTime.value = TURN_SECONDS; // nouvelle partie → tour plein
+  // Démarre la copie client de la session (rejouable si le serveur perd l'état).
+  sessionLog = {
+    seed: data.seed,
+    isCustom,
+    initialSpawns,
+    events: [],
+  };
 }
 
 async function startGame(seed = null) {
@@ -244,7 +277,11 @@ async function startGame(seed = null) {
 
 async function startCustomGame(spawns) {
   customMode.value = true;
-  applyGame(await api.customGame(spawns.map((f) => [f.x, f.y])));
+  const tiles = spawns.map((f) => [f.x, f.y]);
+  applyGame(await api.customGame(tiles), {
+    isCustom: true,
+    initialSpawns: tiles,
+  });
   await fetchLegal();
   render();
 }
@@ -292,10 +329,9 @@ function openNextWaveEditor() {
 
 export async function submitSpawn() {
   if (editorSpawns.value.length === 0) return;
-  const data = await api.setSpawn(
-    state.value.game_id,
-    editorSpawns.value.map((f) => [f.x, f.y])
-  );
+  const tiles = editorSpawns.value.map((f) => [f.x, f.y]);
+  const data = await withGame((id) => api.setSpawn(id, tiles));
+  sessionLog?.events.push(["spawn", tiles]); // miroir de SESSIONS côté serveur
   view.value = data.state;
   screen.value = "play";
   await nextTick();
@@ -320,7 +356,9 @@ export async function newGame() {
 
 export async function askHint() {
   hintLoading.value = true;
-  hint.value = await api.hint(state.value.game_id, sims.value, netEngine.value);
+  hint.value = await withGame((id) =>
+    api.hint(id, sims.value, netEngine.value)
+  );
   hintLoading.value = false;
   showToast(`Indice : ${moveLabel(hint.value)}`);
   render();
@@ -331,7 +369,9 @@ export async function askHint() {
 // éteindre autoplay, et submitSpawn la relance après la pose de la vague.
 async function runAutoplay() {
   while (autoplay.value && !view.value.done && screen.value === "play") {
-    const h = await api.hint(state.value.game_id, sims.value, netEngine.value);
+    const h = await withGame((id) =>
+      api.hint(id, sims.value, netEngine.value)
+    );
     showToast(`${moveLabel(h)}`);
     await playAction(h.index);
     await new Promise((res) => setTimeout(res, 300));
@@ -352,7 +392,7 @@ export async function playAiMove() {
     return;
   }
   hintLoading.value = true;
-  const h = await api.hint(state.value.game_id, sims.value, netEngine.value);
+  const h = await withGame((id) => api.hint(id, sims.value, netEngine.value));
   hintLoading.value = false;
   showToast(`${moveLabel(h)}`);
   await playAction(h.index);
@@ -361,7 +401,7 @@ export async function playAiMove() {
 async function solveOnce(budget) {
   await startGame(currentSeed.value);
   while (!view.value.done) {
-    const h = await api.hint(state.value.game_id, budget, netEngine.value);
+    const h = await withGame((id) => api.hint(id, budget, netEngine.value));
     showToast(`${moveLabel(h)}`);
     await playAction(h.index);
     await new Promise((res) => setTimeout(res, 150));
