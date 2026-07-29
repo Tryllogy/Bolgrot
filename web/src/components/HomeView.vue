@@ -40,14 +40,19 @@ import { startRandom, openEditor } from "../composables/useGame.js";
       <span class="perf-note">Mesuré en prod (2 vCPU). Le « Fort » cherche mieux
       par simulation mais chaque coup coûte ~4× plus de temps.</span>
     </div>
-    <p class="download">
-      🖥️ Envie d'y jouer hors ligne ?
-      <a href="https://github.com/Thomas69400/Bolgrot-Solver"
+    <div class="download">
+      <div class="download-icon">🖥️</div>
+      <h2>Jouer hors ligne</h2>
+      <p>
+        Récupérez la version bureau (jeu Python / pygame) avec les indices &amp;
+        l'autoplay de l'IA, et un mode où vous placez vous-même les flammes.
+      </p>
+      <a class="download-btn"
+         href="https://github.com/Tryllogy/Bolgrot-Solver"
          target="_blank" rel="noopener noreferrer">
-        Télécharger la version bureau sur GitHub
+        ⬇ Télécharger sur GitHub
       </a>
-      — jeu Python (pygame) avec indices &amp; autoplay de l'IA en option.
-    </p>
+    </div>
   </section>
 </template>
 
@@ -104,15 +109,43 @@ import { startRandom, openEditor } from "../composables/useGame.js";
   opacity: 0.8;
 }
 .download {
-  color: var(--text);
-  font-size: 0.8125rem;
-  line-height: 1.6;
   max-width: 560px;
-  margin: 28px auto 0;
+  margin: 40px auto 12px;
+  padding: 28px 24px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--text-strong) 6%, transparent);
+  text-align: center;
 }
-.download a {
+.download-icon {
+  font-size: 2.4rem;
+  line-height: 1;
+  margin-bottom: 8px;
+}
+.download h2 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  margin: 0 0 8px;
   color: var(--text-strong);
-  font-weight: 600;
-  text-decoration: underline;
+}
+.download p {
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  margin: 0 auto 18px;
+  max-width: 440px;
+}
+.download-btn {
+  display: inline-block;
+  padding: 12px 26px;
+  border-radius: 10px;
+  background: var(--accent, #3a7ca5);
+  color: #fff;
+  font-size: 1.05rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+.download-btn:hover {
+  filter: brightness(1.08);
 }
 </style>
