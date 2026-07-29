@@ -266,8 +266,19 @@ reste valable en direct.)
 - **Zéro cold start** (payant, petit) : `--min-instances 1` garde un conteneur
   chaud en permanence — la seule chose non gratuite ; à réserver si l'UX du 1er
   hint gêne.
-- **Sur-souscription CPU** : à fort trafic, ajoute `--concurrency 4` pour éviter
-  que trop de hints CPU-bound se partagent les 2 vCPU (inutile en usage perso).
+- **Concurrence / montée en charge** : le service tourne avec **`--concurrency 2`**
+  (= `AZ_POOL_WORKERS`), pour que Cloud Run **scale horizontalement** sous charge
+  au lieu d'entasser les requêtes sur une instance 2-vCPU (sinon les hints
+  CPU-bound se mettent en file derrière 2 workers et saturent les vCPU pour tout
+  le monde sur l'instance). Avec `maxScale 10`, capacité ≈ 20 hints lourds en
+  parallèle avant mise en file ; gratuit au repos (`minScale 0`). Réglage
+  config-only, sans rebuild : `gcloud run services update bolgrot --region
+  europe-west9 --concurrency 2`.
+
+> **Note (2026-07)** : ce fichier précède le système à **deux moteurs de hint**
+> (`/hint?engine=az|cnn` — *Rapide* `az.pt` / *Fort* `az_cnn_deep.pt`) et le
+> passage d'Oracle à Cloud Run. La source de vérité à jour est
+> `CLAUDE.md` (§ *Web server & deployment*).
 
 ---
 

@@ -11,6 +11,11 @@ live in a pure‑Python `Game` class with **no pygame dependency**, so the logic
 can be stepped programmatically (e.g. by a reinforcement‑learning agent) as well
 as played by a human.
 
+**▶ Play online: https://bolgrot.web.app** — a web version (Vue frontend + FastAPI
+backend) with an in‑game **AI hint** button. Two hint engines are offered:
+*Rapide* (fast MLP) and *Fort* (a stronger grid‑CNN net), each at a selectable
+search budget. See [Web version & live hints](#web-version--live-hints) below.
+
 ---
 
 ## Gameplay
@@ -88,6 +93,31 @@ Training prints the rolling episode return plus a periodic evaluation win rate,
 and saves the best‑scoring policy to `src/ai/ppo.pt`. It also writes a resumable
 training checkpoint (weights + optimizer + progress) to `src/ai/ppo_ckpt.pt`;
 `--resume` picks it up so you can train across several sessions.
+
+### Stronger agents: MCTS & AlphaZero
+
+Model‑free PPO never wins the full 6‑wave game (the winning line is ~60 moves
+deep — too deep for random exploration). The agents that **do** win are search
+based, driving the deterministic `Game` via `clone`/`get_state`/`set_state`:
+
+- **`src/ai/mcts.py`** — Monte‑Carlo Tree Search with shaped‑return backups and a
+  survival‑aware greedy rollout. Wins the full game (~44 % over held‑out seeds at
+  300 sims/move).
+- **`src/ai/alphazero.py`** (`az_train.py` CLI) — AlphaZero‑style **PUCT** self‑play:
+  the network's policy head supplies the prior and its value head replaces the
+  rollout, trained on the search's visit distributions and shaped return‑to‑go,
+  bootstrapped from MCTS wins on a difficulty **curriculum**. Two network types:
+  a flat‑obs MLP (`az.pt`) and a **grid CNN** (`ConvActorCritic`, `--net-type cnn`,
+  requires `BOLGROT_OBS_MODE=grid`). The CNN's spatial structure makes it the
+  strongest learned net — `az_cnn_deep.pt` wins **~77 % @300, ~94 % @1000** sims
+  over held‑out seeds, and win rate keeps climbing with the play‑time search
+  budget (a single net reaches ~100 % by budget escalation).
+
+```bash
+uv run --extra ai python -m src.ai.az_train --curriculum --iterations 100   # train AlphaZero
+uv run --extra ai python -m src.ai.baselines --az src/ai/az.pt --az-sims 300 # benchmark agents
+uv run --extra ai python -m src.ai.play --policy src/ai/az.pt                # watch it play
+```
 
 ---
 
@@ -189,3 +219,39 @@ access.
 - **`mypy`** for static type checking (the codebase is fully type‑annotated;
   `from __future__ import annotations` is used throughout).
 - **`flake8`** for linting.
+
+---
+
+## Web version & live hints
+
+The game also runs in the browser (**https://bolgrot.web.app**): a Vue/Vite
+frontend (`web/`) plus a FastAPI backend (`server/app.py`) served from a single
+container.
+
+- **Deterministic, replayable sessions.** A game is fully defined by its seed and
+  ordered events, so the server stores just that (`Session`) and reconstructs the
+  `Game` on demand — the in‑memory cache can be evicted or restarted losslessly.
+- **In‑game AI hint** (`POST /games/{id}/hint?sims=N&engine=az|cnn`). Hints run in
+  a process pool (`ProcessPoolExecutor`) because the AlphaZero search is CPU‑bound;
+  the async server stays responsive. Two engines are offered — **Rapide** (`az.pt`,
+  flat MLP, ~0.3 s @300 sims) and **Fort** (`az_cnn_deep.pt`, grid CNN, stronger
+  per simulation but ~4× slower). A higher simulation budget = a stronger hint at
+  the cost of latency.
+
+### Deployment (Google Cloud Run)
+
+Deployed on **Google Cloud Run** (project `bolgrot-app`, region europe‑west9),
+fronted by Firebase Hosting for the `bolgrot.web.app` domain. A multi‑stage
+`Dockerfile` builds the Vue frontend, then bakes it into a Python runtime that
+serves both the static front and the API same‑origin. The service scales to zero
+at rest (free) and scales out under load (`--concurrency 2`, `maxScale 10`).
+
+```bash
+# redeploy app code (frontend + backend)
+gcloud run deploy bolgrot --source . --region europe-west9 \
+  --allow-unauthenticated --cpu 2 --memory 2Gi --timeout 300 \
+  --set-env-vars AZ_POOL_WORKERS=2 --project bolgrot-app --quiet
+```
+
+The full runbook (Cloud Run, Firebase Hosting, env vars, hint engines) lives in
+[`DEPLOY.md`](DEPLOY.md).
