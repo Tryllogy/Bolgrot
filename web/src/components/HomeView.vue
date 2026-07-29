@@ -40,6 +40,14 @@ import { startRandom, openEditor } from "../composables/useGame.js";
       <span class="perf-note">Mesuré en prod (2 vCPU). Le « Fort » cherche mieux
       par simulation mais chaque coup coûte ~4× plus de temps.</span>
     </div>
+    <p class="download">
+      🖥️ Envie d'y jouer hors ligne ?
+      <a href="https://github.com/Thomas69400/Bolgrot-Solver"
+         target="_blank" rel="noopener noreferrer">
+        Télécharger la version bureau sur GitHub
+      </a>
+      — jeu Python (pygame) avec indices &amp; autoplay de l'IA en option.
+    </p>
   </section>
 </template>
 
@@ -94,5 +102,17 @@ import { startRandom, openEditor } from "../composables/useGame.js";
   display: block;
   font-size: 0.75rem;
   opacity: 0.8;
+}
+.download {
+  color: var(--text);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  max-width: 560px;
+  margin: 28px auto 0;
+}
+.download a {
+  color: var(--text-strong);
+  font-weight: 600;
+  text-decoration: underline;
 }
 </style>
