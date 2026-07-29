@@ -42,10 +42,11 @@ import { startRandom, openEditor } from "../composables/useGame.js";
     </div>
     <div class="download">
       <div class="download-icon">🖥️</div>
-      <h2>Jouer hors ligne</h2>
+      <h2>Téléchargement</h2>
       <p>
         Récupérez la version bureau : un mode où vous placez vous-même les
         flammes, et l'IA en local (indices &amp; autoplay depuis les sources).
+        Les performances de calcul de l'IA y seront plus élevées et rapides.
       </p>
       <a class="download-btn"
          href="https://github.com/Tryllogy/Bolgrot-Solver/releases/latest/download/bolgrot-windows.exe">
