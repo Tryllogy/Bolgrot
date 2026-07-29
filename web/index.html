@@ -1,9 +1,10 @@
 <!doctype html>
-<html lang="en">
+<html lang="fr">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="canonical" href="https://bolgrot.web.app/" />
     <meta
       name="description"
       content="Survivez face à Bolgrot sur un plateau isométrique, avec un assistant IA (AlphaZero) qui suggère le meilleur coup et peut jouer à votre place."
@@ -41,7 +42,29 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <title>Bolgrot</title>
+    <title>Bolgrot — jeu de survie isométrique tour par tour avec IA</title>
+
+    <!-- Données structurées (rich results Google) : jeu vidéo jouable en ligne. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "VideoGame",
+        "name": "Bolgrot",
+        "url": "https://bolgrot.web.app/",
+        "description": "Jeu de survie isométrique au tour par tour : téléportez-vous pour éteindre les flammes sans qu'aucune ne vous touche. Un assistant IA (AlphaZero) suggère le meilleur coup et peut jouer à votre place.",
+        "image": "https://bolgrot.web.app/og-image.png",
+        "inLanguage": "fr",
+        "genre": ["Stratégie", "Réflexion", "Survie"],
+        "applicationCategory": "Game",
+        "gamePlatform": ["Web", "Windows", "Linux", "macOS"],
+        "operatingSystem": "Web browser, Windows, Linux, macOS",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "EUR"
+        }
+      }
+    </script>
 
     <!-- Analytics visiteurs : GoatCounter (sans cookies, pas de bandeau RGPD).
          Tableau de bord : https://bolgrot.goatcounter.com -->
@@ -50,6 +73,21 @@
   </head>
   <body>
     <div id="app"></div>
+    <noscript>
+      <h1>Bolgrot — jeu de survie isométrique tour par tour</h1>
+      <p>
+        Bolgrot est un jeu de survie au tour par tour sur un plateau
+        isométrique : téléportez-vous pour éteindre les flammes sans qu'aucune
+        ne vous touche. Un assistant IA (AlphaZero) suggère le meilleur coup et
+        peut jouer la partie à votre place. Jouable directement dans le
+        navigateur, ou téléchargeable pour Windows, Linux et macOS (IA
+        embarquée pour un jeu hors-ligne).
+      </p>
+      <p>
+        Ce jeu nécessite JavaScript. Le code source est disponible sur
+        <a href="https://github.com/Tryllogy/Bolgrot-Solver">GitHub</a>.
+      </p>
+    </noscript>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
