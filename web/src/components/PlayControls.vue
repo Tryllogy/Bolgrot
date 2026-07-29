@@ -11,6 +11,7 @@ import {
   hintLoading,
   autoplay,
   toggleAutoplay,
+  playAiMove,
   turnClock,
   turnLow,
 } from "../composables/useGame.js";
@@ -79,6 +80,9 @@ import {
       </label>
       <button class="primary" @click="askHint" :disabled="hintLoading || autoplay">
         {{ hintLoading ? "Réflexion…" : "Indice" }}
+      </button>
+      <button @click="playAiMove" :disabled="hintLoading || autoplay">
+        ⏭ IA : 1 coup
       </button>
       <button @click="toggleAutoplay">
         {{ autoplay ? "⏹ Stop" : "▶ Autoplay" }}

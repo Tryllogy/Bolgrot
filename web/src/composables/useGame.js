@@ -344,6 +344,20 @@ export async function toggleAutoplay() {
   if (autoplay.value) await runAutoplay();
 }
 
+// Un clic = l'IA joue EXACTEMENT un coup, puis rend la main (contrairement à
+// l'autoplay qui enchaîne). Ignoré hors partie, sur partie finie, pendant
+// l'autoplay, ou si un calcul est déjà en cours.
+export async function playAiMove() {
+  if (!view.value || view.value.done || autoplay.value || hintLoading.value) {
+    return;
+  }
+  hintLoading.value = true;
+  const h = await api.hint(state.value.game_id, sims.value, netEngine.value);
+  hintLoading.value = false;
+  showToast(`${moveLabel(h)}`);
+  await playAction(h.index);
+}
+
 async function solveOnce(budget) {
   await startGame(currentSeed.value);
   while (!view.value.done) {
