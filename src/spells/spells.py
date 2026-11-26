@@ -10,7 +10,6 @@ from ..BFS import BFS
 from ..entity import Entity, Flame, Bolgrot, Player
 from ..case import CaseType
 
-
 if TYPE_CHECKING:
     from ..map import Map
     from ..case import Case
@@ -18,6 +17,7 @@ if TYPE_CHECKING:
 
 class Direction(Enum):
     """Unit step vectors plus the orthogonal/diagonal direction groups."""
+
     NORTH = (-1, 0)
     EAST = (0, 1)
     SOUTH = (1, 0)
@@ -28,23 +28,14 @@ class Direction(Enum):
     SOUTH_WEST = (1, -1)
     SOUTH_EAST = (1, 1)
 
-    DIRECTIONS_LINE = [
-        NORTH,
-        EAST,
-        SOUTH,
-        WEST
-    ]
+    DIRECTIONS_LINE = [NORTH, EAST, SOUTH, WEST]
 
-    DIRECTIONS_DIAGONALS = [
-        NORTH_WEST,
-        NORTH_EAST,
-        SOUTH_WEST,
-        SOUTH_EAST
-    ]
+    DIRECTIONS_DIAGONALS = [NORTH_WEST, NORTH_EAST, SOUTH_WEST, SOUTH_EAST]
 
 
 class TypeSpell(Enum):
     """Range shape of a spell: straight LINE, DIAGONAL or FULL area."""
+
     LINE = 2
     DIAGONAL = 4
     FULL = 8
@@ -54,16 +45,16 @@ class Spells(ABC):
     """Abstract spell: cost/usage, range shape, targeting and flame logic."""
 
     def __init__(
-            self,
-            name: str,
-            description: str,
-            cost: int,
-            max_use: int,
-            effects: list[str] | None,
-            type_spell: list[tuple[TypeSpell, int]] | None,
-            bfs: BFS | None,
-            line_of_sight: bool = True,
-            sprite=None
+        self,
+        name: str,
+        description: str,
+        cost: int,
+        max_use: int,
+        effects: list[str] | None,
+        type_spell: list[tuple[TypeSpell, int]] | None,
+        bfs: BFS | None,
+        line_of_sight: bool = True,
+        sprite=None,
     ):
         """Store the spell's stats, range shape, BFS helper and sprite name.
 
@@ -76,8 +67,9 @@ class Spells(ABC):
         self.cost: int = cost
         self.max_use: int = max_use
         self.effects: list[str] = effects if effects is not None else []
-        self.type_spell: list[tuple[TypeSpell, int]] = \
+        self.type_spell: list[tuple[TypeSpell, int]] = (
             type_spell if type_spell is not None else []
+        )
         self.line_of_sight: bool = line_of_sight
         self._image: pygame.Surface | None = None
         self.BFS: BFS | None = bfs
@@ -108,18 +100,13 @@ class Spells(ABC):
 
     @abstractmethod
     def play(
-        self,
-        map: Map,
-        player: Player,
-        tile_clicked: tuple[int, int],
+        self, map: Map, player: Player, tile_clicked: tuple[int, int]
     ) -> None:
         """Apply the spell's effect for a cast on ``tile_clicked``."""
         pass
 
     @abstractmethod
-    def next_turn(
-        self,
-    ) -> None:
+    def next_turn(self) -> None:
         """Reset per-turn state (e.g. usage counters) at end of turn."""
         pass
 
@@ -128,21 +115,19 @@ class Spells(ABC):
         """Lazily load and cache the spell's sprite surface."""
         if self._image is None:
             from .. import constant
+
             self._image = pygame.image.load(
-                os.path.join(constant.SPRITES_DIR, self.sprite))
+                os.path.join(constant.SPRITES_DIR, self.sprite)
+            )
         return self._image
 
-    def contains(
-        self,
-        mouse_x: int,
-        mouse_y: int,
-        x: int,
-        y: int,
-    ) -> bool:
+    def contains(self, mouse_x: int, mouse_y: int, x: int, y: int) -> bool:
         """Return True if the mouse is over the spell icon drawn at (x, y)."""
         img = self.image
-        return (x <= mouse_x < x + img.get_width()
-                and y <= mouse_y < y + img.get_height())
+        return (
+            x <= mouse_x < x + img.get_width()
+            and y <= mouse_y < y + img.get_height()
+        )
 
     def _draw_tooltip(
         self,
@@ -154,9 +139,13 @@ class Spells(ABC):
     ) -> None:
         """Draw the hover tooltip with the name, AP cost, effects and text."""
         from .. import constant
+
         height_rect = 300
-        pygame.draw.rect(screen, constant.BACKGROUND_POPUP,
-                         [pos_x, pos_y - height_rect, 400, height_rect])
+        pygame.draw.rect(
+            screen,
+            constant.BACKGROUND_POPUP,
+            [pos_x, pos_y - height_rect, 400, height_rect],
+        )
         screen.blit(
             font_title.render(self.name, True, (255, 255, 255)),
             (pos_x, pos_y - height_rect),
@@ -168,14 +157,12 @@ class Spells(ABC):
         for i, e in enumerate(self.effects):
             screen.blit(
                 font_txt.render(str(e), True, (255, 255, 255)),
-                (pos_x,
-                 pos_y - height_rect + 100 + font_txt.get_height() * i),
+                (pos_x, pos_y - height_rect + 100 + font_txt.get_height() * i),
             )
         for i, d in enumerate(self.description.split(".")):
             screen.blit(
                 font_txt.render(d, True, (255, 255, 255)),
-                (pos_x,
-                 pos_y - height_rect + 200 + font_txt.get_height() * i),
+                (pos_x, pos_y - height_rect + 200 + font_txt.get_height() * i),
             )
 
     def draw(
@@ -194,9 +181,7 @@ class Spells(ABC):
         screen.blit(self.image, (x, y))
 
     def previsu(
-        self,
-        pos_player: tuple[int, int],
-        cases: dict[tuple[int, int], Case]
+        self, pos_player: tuple[int, int], cases: dict[tuple[int, int], Case]
     ) -> list[tuple]:
         """Return the tiles this spell can target from ``pos_player``.
 
@@ -208,17 +193,9 @@ class Spells(ABC):
             t, r = type_s
             match t.value:
                 case 2:
-                    all_pos.extend(self.make_line(
-                        pos_player,
-                        cases,
-                        r
-                    ))
+                    all_pos.extend(self.make_line(pos_player, cases, r))
                 case 4:
-                    all_pos.extend(self.make_diag(
-                        pos_player,
-                        cases,
-                        r
-                    ))
+                    all_pos.extend(self.make_diag(pos_player, cases, r))
                 case 8:
                     print("FULL")
         return all_pos
@@ -227,7 +204,7 @@ class Spells(ABC):
         self,
         pos_player: tuple[int, int],
         cases: dict[tuple[int, int], Case],
-        range_s: int
+        range_s: int,
     ) -> list[tuple]:
         """Return reachable tiles up to ``range_s`` along the 4 orthogonals.
 
@@ -241,10 +218,13 @@ class Spells(ABC):
             nx, ny = x, y
             for _ in range(range_s):
                 nx, ny = nx + dx, ny + dy
-                if self.is_in_map((nx, ny), cases) and \
-                        not self.is_blocked_by_sight(
-                            (nx, ny), cases, direction) and \
-                   self.is_entity_killable((nx, ny), cases):
+                if (
+                    self.is_in_map((nx, ny), cases)
+                    and not self.is_blocked_by_sight(
+                        (nx, ny), cases, direction
+                    )
+                    and self.is_entity_killable((nx, ny), cases)
+                ):
                     possible_pos.append((nx, ny))
         return possible_pos
 
@@ -252,7 +232,7 @@ class Spells(ABC):
         self,
         pos_player: tuple[int, int],
         cases: dict[tuple[int, int], Case],
-        range_s: int
+        range_s: int,
     ) -> list[tuple]:
         """Return reachable tiles up to ``range_s`` along the 4 diagonals.
 
@@ -265,25 +245,24 @@ class Spells(ABC):
             nx, ny = x, y
             for _ in range(range_s):
                 nx, ny = nx + dx, ny + dy
-                if self.is_in_map((nx, ny), cases) and \
-                        not self.is_blocked_by_sight(
-                            (nx, ny), cases, direction) and \
-                   self.is_entity_killable((nx, ny), cases):
+                if (
+                    self.is_in_map((nx, ny), cases)
+                    and not self.is_blocked_by_sight(
+                        (nx, ny), cases, direction
+                    )
+                    and self.is_entity_killable((nx, ny), cases)
+                ):
                     possible_pos.append((nx, ny))
         return possible_pos
 
     def _find_case(
-        self,
-        pos: tuple[int, int],
-        cases: dict[tuple[int, int], Case]
+        self, pos: tuple[int, int], cases: dict[tuple[int, int], Case]
     ) -> Case | None:
         """Return the cell at ``pos`` (O(1) dict lookup), or ``None``."""
         return cases.get(pos)
 
     def is_entity_killable(
-        self,
-        pos_spell: tuple[int, int],
-        cases: dict[tuple[int, int], Case]
+        self, pos_spell: tuple[int, int], cases: dict[tuple[int, int], Case]
     ) -> bool:
         """Return True if ``pos_spell`` may be targeted past its entity.
 
@@ -318,9 +297,7 @@ class Spells(ABC):
         return c is not None and c.entity is not None and c.entity.blocks_sight
 
     def is_in_map(
-        self,
-        pos_spell: tuple[int, int],
-        cases: dict[tuple[int, int], Case]
+        self, pos_spell: tuple[int, int], cases: dict[tuple[int, int], Case]
     ) -> bool:
         """Return True if ``pos_spell`` corresponds to a cell on the map."""
         return self._find_case(pos_spell, cases) is not None
@@ -330,7 +307,7 @@ class Spells(ABC):
         cases: dict[tuple[int, int], Case],
         tile_clicked: tuple[int, int] | None = None,
         player: Player | None = None,
-        killable: bool = True
+        killable: bool = True,
     ) -> None:
         """Move every flame one tile toward the target, nearest-first.
 
@@ -345,17 +322,15 @@ class Spells(ABC):
         elif player is not None:
             pos_x, pos_y = player.pos_x, player.pos_y
         else:
-            raise ValueError(
-                "Either tile_clicked or player must be provided.")
+            raise ValueError("Either tile_clicked or player must be provided.")
 
         flame_cases = [
-            case for case in cases.values()
+            case
+            for case in cases.values()
             if type(case.entity) is Flame
             and (case.x, case.y) != (pos_x, pos_y)
         ]
-        flame_cases.sort(
-            key=lambda c: abs(c.x - pos_x) + abs(c.y - pos_y)
-        )
+        flame_cases.sort(key=lambda c: abs(c.x - pos_x) + abs(c.y - pos_y))
         for case in flame_cases:
             dx = pos_x - case.x
             dy = pos_y - case.y
@@ -369,15 +344,16 @@ class Spells(ABC):
                 step = (case.x + sx, case.y + sy)
             new_case = self._find_case(step, cases)
             if new_case is None or new_case.case_type == CaseType.WALL:
-                path = self.BFS.find_path(
-                    (case.x, case.y),
-                    (pos_x, pos_y)
+                path = self.BFS.find_path((case.x, case.y), (pos_x, pos_y))
+                new_case = (
+                    self._find_case(path, cases) if path is not None else None
                 )
-                new_case = self._find_case(path, cases) \
-                    if path is not None else None
             if new_case is None or new_case.case_type == CaseType.WALL:
                 continue
-            if type(new_case.entity) is Bolgrot or type(new_case.entity) is Flame:
+            if (
+                type(new_case.entity) is Bolgrot
+                or type(new_case.entity) is Flame
+            ):
                 continue
             elif type(new_case.entity) is Player and killable:
                 if player is not None:
@@ -387,15 +363,14 @@ class Spells(ABC):
                 case.entity = None
 
     def push_flames(
-        self,
-        player: Player,
-        cases: dict[tuple[int, int], Case],
+        self, player: Player, cases: dict[tuple[int, int], Case]
     ) -> None:
         """Push Flames away from the player position for 1 case if
         they are next to the player. (diagonals included)"""
         assert self.BFS is not None
         flame_cases = [
-            case for case in cases.values()
+            case
+            for case in cases.values()
             if type(case.entity) is Flame
             and (case.x, case.y) != (player.pos_x, player.pos_y)
             and abs(case.x - player.pos_x) <= 1
@@ -419,16 +394,19 @@ class Spells(ABC):
             new_case = self._find_case(step, cases)
             if new_case is None or new_case.case_type == CaseType.WALL:
                 path = self.BFS.find_path(
-                    (case.x, case.y),
-                    (player.pos_x, player.pos_y)
+                    (case.x, case.y), (player.pos_x, player.pos_y)
                 )
-                new_case = self._find_case(path, cases) \
-                    if path is not None else None
+                new_case = (
+                    self._find_case(path, cases) if path is not None else None
+                )
             if new_case is None or new_case.case_type == CaseType.WALL:
                 continue
             if type(new_case.entity) is Bolgrot:
                 continue
-            elif type(new_case.entity) is Flame or type(new_case.entity) is Player:
+            elif (
+                type(new_case.entity) is Flame
+                or type(new_case.entity) is Player
+            ):
                 player.hp = 0
             elif new_case.entity is None:
                 new_case.entity = case.entity

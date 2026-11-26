@@ -5,6 +5,7 @@ through these helpers so action selection and (de)serialisation live in exactly
 one place. Nothing here contains game logic — it only reads the environment API
 (``get_observation`` / ``legal_actions`` / ``step``).
 """
+
 from __future__ import annotations
 
 from typing import Callable
@@ -22,6 +23,7 @@ from .network import ActorCritic
 # them all.
 ActionFn = Callable[[Game], int]
 
+
 # Fixed seeds used to score a policy so results are comparable across training
 # runs while still covering many flame layouts. 32 seeds keep the win-rate
 # quantisation fine (~3% steps) so curriculum promotion isn't decided by a
@@ -33,8 +35,8 @@ def eval_seed(i: int) -> int:
     :data:`EVAL_SEEDS` for a large held-out set. The training gate selects on
     ``EVAL_SEEDS[:16]``, so only indices >= 16 are unselected — and there are
     just 16 of those in the list itself, too few to resolve the differences
-    that matter here (measured 2026-07-16: 4/8 vs 6/8 on the same net is noise).
-    ``eval_seed(16..47)`` gives 32 seeds no gate has ever seen.
+    that matter here (measured 2026-07-16: 4/8 vs 6/8 on the same net is
+    noise). ``eval_seed(16..47)`` gives 32 seeds no gate has ever seen.
     """
     return 101 * i + 7
 
@@ -54,8 +56,9 @@ def obs_and_mask(game: Game) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 @torch.no_grad()
-def choose_action(net: ActorCritic, game: Game,
-                  deterministic: bool = True) -> int:
+def choose_action(
+    net: ActorCritic, game: Game, deterministic: bool = True
+) -> int:
     """Pick a legal action for the current state.
 
     ``deterministic`` takes the highest-probability legal action (greedy, used
@@ -91,9 +94,14 @@ def run_episode_decomposed(
     ``flames_per_wave`` / ``spawn_radius`` / ``spawn_formation`` set the
     curriculum difficulty (``None`` each = full game).
     """
-    game = Game(Player(*constant.BASE_PLAYER_POS), seed=seed,
-                num_waves=num_waves, flames_per_wave=flames_per_wave,
-                spawn_radius=spawn_radius, spawn_formation=spawn_formation)
+    game = Game(
+        Player(*constant.BASE_PLAYER_POS),
+        seed=seed,
+        num_waves=num_waves,
+        flames_per_wave=flames_per_wave,
+        spawn_radius=spawn_radius,
+        spawn_formation=spawn_formation,
+    )
     total = 0.0
     steps = 0
     parts = {part: 0.0 for part in REWARD_PARTS}
@@ -110,12 +118,16 @@ def run_episode_decomposed(
     return total, game.won, steps, parts
 
 
-def run_episode(net: ActorCritic, seed: int,
-                deterministic: bool = True,
-                max_steps: int = MAX_STEPS) -> tuple[float, bool]:
+def run_episode(
+    net: ActorCritic,
+    seed: int,
+    deterministic: bool = True,
+    max_steps: int = MAX_STEPS,
+) -> tuple[float, bool]:
     """Play one full game and return ``(total_reward, won)``."""
     total, won, _, _ = run_episode_decomposed(
-        net_action_fn(net, deterministic), seed, max_steps)
+        net_action_fn(net, deterministic), seed, max_steps
+    )
     return total, won
 
 
@@ -137,10 +149,16 @@ def evaluate_decomposed(
     """
     net.eval()
     act_fn = net_action_fn(net, deterministic)
-    results = [run_episode_decomposed(act_fn, s, num_waves=num_waves,
-                                      flames_per_wave=flames_per_wave,
-                                      spawn_radius=spawn_radius)
-               for s in seeds]
+    results = [
+        run_episode_decomposed(
+            act_fn,
+            s,
+            num_waves=num_waves,
+            flames_per_wave=flames_per_wave,
+            spawn_radius=spawn_radius,
+        )
+        for s in seeds
+    ]
     net.train()
     n = len(seeds)
     mean_reward = sum(total for total, _, _, _ in results) / n
@@ -149,8 +167,9 @@ def evaluate_decomposed(
     return mean_reward, win_rate, parts
 
 
-def evaluate(net: ActorCritic, seeds: list[int] = EVAL_SEEDS,
-             deterministic: bool = True) -> tuple[float, float]:
+def evaluate(
+    net: ActorCritic, seeds: list[int] = EVAL_SEEDS, deterministic: bool = True
+) -> tuple[float, float]:
     """Mean total reward and win rate of ``net`` over ``seeds``."""
     mean_reward, win_rate, _ = evaluate_decomposed(net, seeds, deterministic)
     return mean_reward, win_rate
@@ -158,8 +177,11 @@ def evaluate(net: ActorCritic, seeds: list[int] = EVAL_SEEDS,
 
 def format_reward_parts(parts: dict[str, float]) -> str:
     """Compact ``name +value`` view of a reward breakdown (nonzero terms)."""
-    return "  ".join(f"{name} {parts[name]:+.2f}"
-                     for name in REWARD_PARTS if abs(parts[name]) > 1e-9)
+    return "  ".join(
+        f"{name} {parts[name]:+.2f}"
+        for name in REWARD_PARTS
+        if abs(parts[name]) > 1e-9
+    )
 
 
 def save_policy(net: ActorCritic, path: str) -> None:
@@ -184,10 +206,15 @@ def load_policy(path: str, device: str = "cpu") -> ActorCritic:
     existed (e.g. ``az.pt``) still load.
     """
     from .network import build_net
+
     ckpt = torch.load(path, map_location=device, weights_only=True)
-    net = build_net(ckpt["obs_size"], ckpt["num_actions"], ckpt["hidden"],
-                    value_dim=ckpt.get("value_dim", 1),
-                    net_type=ckpt.get("net_type", "mlp"))
+    net = build_net(
+        ckpt["obs_size"],
+        ckpt["num_actions"],
+        ckpt["hidden"],
+        value_dim=ckpt.get("value_dim", 1),
+        net_type=ckpt.get("net_type", "mlp"),
+    )
     net.load_state_dict(ckpt["state_dict"])
     net.to(device)
     net.eval()

@@ -22,6 +22,7 @@ Two design points that make the search actually work on this game:
   suicides within a few steps (landing on a flame lets ``attract_flames`` pull
   a neighbour onto the player), which makes every leaf look equally fatal.
 """
+
 from __future__ import annotations
 
 import math
@@ -72,7 +73,7 @@ def safe_greedy(game: Game) -> int:
         if not ok:
             continue
         spell_index, (dx, dy) = game.ACTIONS[idx]
-        if spell_index not in (0, 1):        # only the player-moving jumps
+        if spell_index not in (0, 1):  # only the player-moving jumps
             continue
         target = (px + dx, py + dy)
         lands = target in flames
@@ -89,8 +90,8 @@ def safe_greedy(game: Game) -> int:
             game.set_state(save)
             if not lethal:
                 return idx
-        for idx, ok in enumerate(legal):           # no safe jump: reposition
-            if ok and game.ACTIONS[idx][0] == 2:   # MoveFlames: killable=False
+        for idx, ok in enumerate(legal):  # no safe jump: reposition
+            if ok and game.ACTIONS[idx][0] == 2:  # MoveFlames: killable=False
                 return idx
     return end_idx if legal[end_idx] else _first_legal(game)
 
@@ -98,19 +99,27 @@ def safe_greedy(game: Game) -> int:
 class _Node:
     """A game state in the search tree (stores a snapshot, not a full game)."""
 
-    __slots__ = ("state", "reward_in", "done", "children", "untried",
-                 "visits", "value")
+    __slots__ = (
+        "state",
+        "reward_in",
+        "done",
+        "children",
+        "untried",
+        "visits",
+        "value",
+    )
 
-    def __init__(self, game: Game, reward_in: float,
-                 rng: random.Random) -> None:
-        self.state = game.get_state()            # snapshot of this state
-        self.reward_in = reward_in               # reward of the edge into here
+    def __init__(
+        self, game: Game, reward_in: float, rng: random.Random
+    ) -> None:
+        self.state = game.get_state()  # snapshot of this state
+        self.reward_in = reward_in  # reward of the edge into here
         self.done = game.done
         self.children: dict[int, "_Node"] = {}
         self.untried: list[int] = [] if game.done else _legal_indices(game)
         rng.shuffle(self.untried)
         self.visits = 0
-        self.value = 0.0                         # summed backed-up return
+        self.value = 0.0  # summed backed-up return
 
 
 def _ucb_child(node: _Node, c: float) -> _Node:
@@ -140,9 +149,15 @@ def _rollout(work: Game, policy: ActionFn, depth: int, gamma: float) -> float:
     return total
 
 
-def _simulate(root: _Node, work: Game, rollout_policy: ActionFn,
-              rollout_depth: int, c: float, gamma: float,
-              rng: random.Random) -> None:
+def _simulate(
+    root: _Node,
+    work: Game,
+    rollout_policy: ActionFn,
+    rollout_depth: int,
+    c: float,
+    gamma: float,
+    rng: random.Random,
+) -> None:
     """One MCTS iteration: select, expand, roll out, back up the return."""
     node = root
     path = [root]
@@ -176,17 +191,22 @@ def _simulate(root: _Node, work: Game, rollout_policy: ActionFn,
         visited.value += ret
 
 
-def mcts_root_visits(game: Game, simulations: int, rng: random.Random,
-                     rollout_depth: int = 16, c_ucb: float = 1.4,
-                     rollout_policy: ActionFn | None = None,
-                     gamma: float = 1.0) -> dict[int, int]:
+def mcts_root_visits(
+    game: Game,
+    simulations: int,
+    rng: random.Random,
+    rollout_depth: int = 16,
+    c_ucb: float = 1.4,
+    rollout_policy: ActionFn | None = None,
+    gamma: float = 1.0,
+) -> dict[int, int]:
     """Search ``game`` and return the root's ``{action: visit count}``.
 
     Same search as :func:`mcts_action_fn` (which is just this plus an argmax),
     exposed so AlphaZero can use MCTS's visit distribution as a policy target —
     the search is strong enough to win the full game, so its visits are a much
-    better thing to imitate than a self-play run that never wins. Empty when the
-    game is over or has no legal move.
+    better thing to imitate than a self-play run that never wins. Empty when
+    the game is over or has no legal move.
     """
     if game.done:
         return {}
@@ -200,9 +220,14 @@ def mcts_root_visits(game: Game, simulations: int, rng: random.Random,
     return {a: child.visits for a, child in root.children.items()}
 
 
-def mcts_action_fn(simulations: int = 200, rollout_depth: int = 16,
-                   c_ucb: float = 1.4, rollout_policy: ActionFn | None = None,
-                   gamma: float = 1.0, seed: int = 0) -> ActionFn:
+def mcts_action_fn(
+    simulations: int = 200,
+    rollout_depth: int = 16,
+    c_ucb: float = 1.4,
+    rollout_policy: ActionFn | None = None,
+    gamma: float = 1.0,
+    seed: int = 0,
+) -> ActionFn:
     """Build an :data:`ActionFn` that picks each move by MCTS lookahead.
 
     ``simulations`` search iterations are run per move on a private clone of
@@ -216,7 +241,7 @@ def mcts_action_fn(simulations: int = 200, rollout_depth: int = 16,
     def act(game: Game) -> int:
         if game.done:
             return 0
-        work = game.clone()                      # one clone per move
+        work = game.clone()  # one clone per move
         root = _Node(work, reward_in=0.0, rng=rng)
         if not root.untried:
             return _first_legal(game)

@@ -17,11 +17,14 @@ from .entity import Flame, Player, Bolgrot
 _LINE_DIRS = [(-1, 0), (0, 1), (1, 0), (0, -1)]
 _DIAG_DIRS = [(-1, -1), (-1, 1), (1, -1), (1, 1)]
 _ACTIONS: list[tuple[int | None, tuple[int, int]]] = [
-    *[(0, d) for d in _LINE_DIRS],                       # ShortJump, r=1
-    *[(1, (d[0] * r, d[1] * r))                          # LongJump,  r=1,2
-      for r in (1, 2) for d in _LINE_DIRS],
-    *[(2, d) for d in _DIAG_DIRS],                       # MoveFlames, r=1
-    (None, (0, 0)),                                      # end turn
+    *[(0, d) for d in _LINE_DIRS],  # ShortJump, r=1
+    *[
+        (1, (d[0] * r, d[1] * r))  # LongJump,  r=1,2
+        for r in (1, 2)
+        for d in _LINE_DIRS
+    ],
+    *[(2, d) for d in _DIAG_DIRS],  # MoveFlames, r=1
+    (None, (0, 0)),  # end turn
 ]
 
 # Names of the additive reward terms produced by :meth:`Game.step`. Kept as an
@@ -29,7 +32,13 @@ _ACTIONS: list[tuple[int | None, tuple[int, int]]] = [
 # per-term sums (see ``src/ai/baselines.py``) and spot which term a policy is
 # actually farming. Their sum is exactly the scalar reward ``step`` returns.
 REWARD_PARTS: tuple[str, ...] = (
-    "survive", "stall", "cast", "approach", "clear", "hp", "terminal",
+    "survive",
+    "stall",
+    "cast",
+    "approach",
+    "clear",
+    "hp",
+    "terminal",
     "illegal",
 )
 
@@ -69,19 +78,21 @@ class Game:
           makes the early stages actually winnable — the real difficulty is
           spawn *distance*, not count. The final stage leaves this ``None`` to
           train on the true game patterns.
-        - ``spawn_formation`` — when set, overrides both of the above and spawns
-          a *fixed shape*. ``"line"`` places ``flames_per_wave`` mutually
-          adjacent flames in a straight line on the player's own row or column,
-          starting ``SPAWN_LINE_OFFSET`` tiles away. This is the one shape the
-          random-radius stages never produce: a dense cluster where clearing the
-          near flame pushes its neighbour into the next one, which is lethal. It
-          exists to teach the push-chain death before the full game.
+        - ``spawn_formation`` — when set, overrides both of the above and
+          spawns a *fixed shape*. ``"line"`` places ``flames_per_wave``
+          mutually adjacent flames in a straight line on the player's own
+          row or column, starting ``SPAWN_LINE_OFFSET`` tiles away. This is
+          the one shape the random-radius stages never produce: a dense
+          cluster where clearing the near flame pushes its neighbour into the
+          next one, which is lethal. It exists to teach the push-chain death
+          before the full game.
         """
         self.map: Map = Map()
         self.player: Player = player
         self._rng: random.Random = random.Random(seed)
-        self.num_waves: int = (num_waves if num_waves is not None
-                               else constant.NB_WAVES)
+        self.num_waves: int = (
+            num_waves if num_waves is not None else constant.NB_WAVES
+        )
         self.flames_per_wave: int | None = flames_per_wave
         self.spawn_radius: int | None = spawn_radius
         self.spawn_formation: str | None = spawn_formation
@@ -95,8 +106,9 @@ class Game:
         self.bolgrot: Bolgrot = Bolgrot(*constant.BASE_BOLGROT_POS)
         self.map.place_entity([constant.BASE_BOLGROT_POS], self.bolgrot)
         self.patterns: Patterns = Patterns(seed=seed)
-        self.spawn_pattern: list[tuple[int, int]] = \
-            self._make_wave(self.patterns.draw_opening())
+        self.spawn_pattern: list[tuple[int, int]] = self._make_wave(
+            self.patterns.draw_opening()
+        )
         self.waves_spawned: int = 0
         self.previsualiation: list[tuple[int, int]] = []
         self.spell: Spells | None = None
@@ -129,7 +141,10 @@ class Game:
         """
         p = self.player
         return {
-            "px": p.pos_x, "py": p.pos_y, "hp": p.hp, "pa": p.pa,
+            "px": p.pos_x,
+            "py": p.pos_y,
+            "hp": p.hp,
+            "pa": p.pa,
             "flames": list(self.map.flames),
             "time_used": [s.time_used for s in p.spells],
             "waves_spawned": self.waves_spawned,
@@ -138,8 +153,9 @@ class Game:
             "won": self.won,
             "spawn_pattern": list(self.spawn_pattern),
             "previsu": list(self.previsualiation),
-            "spell_idx": (p.spells.index(self.spell)
-                          if self.spell is not None else None),
+            "spell_idx": (
+                p.spells.index(self.spell) if self.spell is not None else None
+            ),
             "last_reward": dict(self.last_reward),
             "rng": self._rng.getstate(),
             "prng": self.patterns._rng.getstate(),
@@ -172,8 +188,11 @@ class Game:
         self.won = state["won"]
         self.spawn_pattern = list(state["spawn_pattern"])
         self.previsualiation = list(state["previsu"])
-        self.spell = (p.spells[state["spell_idx"]]
-                      if state["spell_idx"] is not None else None)
+        self.spell = (
+            p.spells[state["spell_idx"]]
+            if state["spell_idx"] is not None
+            else None
+        )
         self.last_reward = dict(state["last_reward"])
         self._rng.setstate(state["rng"])
         self.patterns._rng.setstate(state["prng"])
@@ -182,10 +201,13 @@ class Game:
     def reset(self, seed: int | None = None) -> None:
         """Re-initialise all game state, keeping the current difficulty."""
         self.__init__(  # type: ignore[misc]
-            self.player, seed=seed,
-            num_waves=self.num_waves, flames_per_wave=self.flames_per_wave,
+            self.player,
+            seed=seed,
+            num_waves=self.num_waves,
+            flames_per_wave=self.flames_per_wave,
             spawn_radius=self.spawn_radius,
-            spawn_formation=self.spawn_formation)
+            spawn_formation=self.spawn_formation,
+        )
 
     def _make_wave(
         self, pattern: list[tuple[int, int]]
@@ -201,18 +223,21 @@ class Game:
             return self._near_spawn(self.flames_per_wave or 1)
         if self.flames_per_wave is None:
             return pattern
-        return pattern[:self.flames_per_wave]
+        return pattern[: self.flames_per_wave]
 
-    def _near_spawn(self, k: int, radius: int | None = None) -> \
-            list[tuple[int, int]]:
+    def _near_spawn(
+        self, k: int, radius: int | None = None
+    ) -> list[tuple[int, int]]:
         """``k`` random free tiles within ``radius`` (default ``spawn_radius``)
         of the player."""
         if radius is None:
             radius = self.spawn_radius
+        assert radius is not None, "_near_spawn needs a spawn radius"
         px, py = self.player.pos_x, self.player.pos_y
         occupied = self._occupied_tiles()
         candidates = [
-            pos for pos, case in self.map.cases.items()
+            pos
+            for pos, case in self.map.cases.items()
             if case.case_type == CaseType.FREE
             and pos not in occupied
             and 0 < abs(pos[0] - px) + abs(pos[1] - py) <= radius
@@ -236,8 +261,10 @@ class Game:
         self._rng.shuffle(directions)
         for dx, dy in directions:
             line = [
-                (px + dx * (constant.SPAWN_LINE_OFFSET + i),
-                 py + dy * (constant.SPAWN_LINE_OFFSET + i))
+                (
+                    px + dx * (constant.SPAWN_LINE_OFFSET + i),
+                    py + dy * (constant.SPAWN_LINE_OFFSET + i),
+                )
                 for i in range(k)
             ]
             if all(
@@ -263,11 +290,11 @@ class Game:
             return
         self.spell = spell
         self.previsualiation = spell.previsu(
-            (self.player.pos_x, self.player.pos_y), self.map.cases)
+            (self.player.pos_x, self.player.pos_y), self.map.cases
+        )
 
     def play_selected_spell(
-            self,
-            tile_clicked: tuple[int, int] | None = None,
+        self, tile_clicked: tuple[int, int] | None = None
     ) -> None:
         """Play the selected spell on the clicked tile, if valid."""
         if not self.previsualiation or tile_clicked is None:
@@ -319,8 +346,9 @@ class Game:
         """Resolve win/loss: dead player loses; all waves cleared wins."""
         if self.player.hp <= 0:
             self.done = True
-        elif self.waves_spawned >= self.num_waves and \
-                not self._flames_remain():
+        elif (
+            self.waves_spawned >= self.num_waves and not self._flames_remain()
+        ):
             self.done = True
             self.won = True
 
@@ -333,16 +361,15 @@ class Game:
 
         Iterates cells in map order and filters by the O(1) flame set — same
         order as the old full ``isinstance`` scan (the observation's K-nearest
-        tie-breaks on it, so the order must be byte-identical), but with a cheap
-        set-membership test instead of an ABC ``isinstance`` per cell.
+        tie-breaks on it, so the order must be byte-identical), but with a
+        cheap set-membership test instead of an ABC ``isinstance`` per cell.
         """
         flames = self.map.flames
         return [pos for pos in self.map.cases if pos in flames]
 
     @staticmethod
     def _nearest_target_dist(
-        targets: list[tuple[int, int]],
-        pos: tuple[int, int],
+        targets: list[tuple[int, int]], pos: tuple[int, int]
     ) -> int:
         """Manhattan distance from ``pos`` to the nearest tile in ``targets``.
 
@@ -355,9 +382,7 @@ class Game:
         return min(abs(x - px) + abs(y - py) for x, y in targets)
 
     def _nearest_relative(
-        self,
-        positions: list[tuple[int, int]],
-        k: int,
+        self, positions: list[tuple[int, int]], k: int
     ) -> list[float]:
         """Encode the ``k`` nearest ``positions`` relative to the player.
 
@@ -368,8 +393,7 @@ class Game:
         gx = self.map.grid_max_x or 1
         gy = self.map.grid_max_y or 1
         nearest = sorted(
-            positions,
-            key=lambda p: abs(p[0] - px) + abs(p[1] - py),
+            positions, key=lambda p: abs(p[0] - px) + abs(p[1] - py)
         )[:k]
         out: list[float] = []
         for i in range(k):
@@ -394,6 +418,7 @@ class Game:
         ~1.4 GB.
         """
         import numpy as np
+
         H, W, C = constant.GRID_H, constant.GRID_W, constant.GRID_CHANNELS
         plane = H * W
         grid = np.zeros(C * plane + constant.GRID_SCALARS, dtype=np.float32)
@@ -403,11 +428,12 @@ class Game:
                 grid[channel * plane + x * W + y] = 1.0
             elif channel != 0:  # a live entity must fit; the free-mask may not
                 raise ValueError(
-                    f"grid cell ({x},{y}) outside {H}x{W} — raise GRID_H/W")
+                    f"grid cell ({x},{y}) outside {H}x{W} — raise GRID_H/W"
+                )
 
         for (x, y), case in self.map.cases.items():
             if case.case_type == CaseType.FREE and 0 <= x < H and 0 <= y < W:
-                grid[x * W + y] = 1.0                      # channel 0: free
+                grid[x * W + y] = 1.0  # channel 0: free
         for x, y in self._flame_positions():
             _set(1, x, y)
         for x, y in self.spawn_pattern:
@@ -459,18 +485,22 @@ class Game:
         )
         obs = scalars
         obs += self._nearest_relative(flames, constant.K_NEAREST_FLAMES)
-        obs += self._nearest_relative(self.spawn_pattern,
-                                      constant.K_NEAREST_SPAWN)
+        obs += self._nearest_relative(
+            self.spawn_pattern, constant.K_NEAREST_SPAWN
+        )
         return obs
 
     @staticmethod
     def observation_size() -> int:
         """Length of the vector returned by :meth:`get_observation`."""
         if constant.OBS_MODE == "grid":
-            return (constant.GRID_CHANNELS * constant.GRID_H * constant.GRID_W
-                    + constant.GRID_SCALARS)
-        return (11 + 3 * constant.K_NEAREST_FLAMES
-                + 3 * constant.K_NEAREST_SPAWN)
+            return (
+                constant.GRID_CHANNELS * constant.GRID_H * constant.GRID_W
+                + constant.GRID_SCALARS
+            )
+        return (
+            11 + 3 * constant.K_NEAREST_FLAMES + 3 * constant.K_NEAREST_SPAWN
+        )
 
     def legal_actions(self) -> list[bool]:
         """Boolean mask over :data:`Game.ACTIONS` of the currently legal moves.
@@ -490,8 +520,10 @@ class Game:
         for i, (spell_index, (dx, dy)) in enumerate(self.ACTIONS):
             if spell_index is None:
                 mask[i] = True
-            elif spell_index in previs and \
-                    (px + dx, py + dy) in previs[spell_index]:
+            elif (
+                spell_index in previs
+                and (px + dx, py + dy) in previs[spell_index]
+            ):
                 mask[i] = True
         return mask
 
@@ -511,8 +543,8 @@ class Game:
         reductions in flame count earn ``REWARD_CLEAR_FLAME``.
 
         On top of those outcome rewards, two shaping terms guide *style*: an
-        approach reward (``REWARD_APPROACH`` per tile the player moves closer to
-        the nearest flame / next-spawn tile) and a per-spell cast bias
+        approach reward (``REWARD_APPROACH`` per tile the player moves closer
+        to the nearest flame / next-spawn tile) and a per-spell cast bias
         (``REWARD_CAST[spell_index]`` — favouring the short jump over the long
         jump, and penalising the "Inaction" flame-drag). See ``constant.py``.
         """
@@ -536,7 +568,8 @@ class Game:
         # ending a turn or dragging flames leaves the player put.
         approach_targets = self._flame_positions() + list(self.spawn_pattern)
         dist_before = self._nearest_target_dist(
-            approach_targets, (self.player.pos_x, self.player.pos_y))
+            approach_targets, (self.player.pos_x, self.player.pos_y)
+        )
 
         if spell_index is None:
             # Anti-stall: penalise ending a turn with flames still alive on
@@ -552,9 +585,11 @@ class Game:
             parts["cast"] = constant.REWARD_CAST[spell_index]
 
         dist_after = self._nearest_target_dist(
-            approach_targets, (self.player.pos_x, self.player.pos_y))
-        parts["approach"] = \
-            constant.REWARD_APPROACH * (dist_before - dist_after)
+            approach_targets, (self.player.pos_x, self.player.pos_y)
+        )
+        parts["approach"] = constant.REWARD_APPROACH * (
+            dist_before - dist_after
+        )
 
         flames_after = len(self._flame_positions())
         # Reward only flame *reductions*: the wave spawned on an end-turn adds
@@ -579,6 +614,7 @@ class Game:
                 waves_left = self.num_waves - self.waves_spawned
                 parts["terminal"] = (
                     constant.REWARD_DEATH
-                    + constant.REWARD_DEATH_PER_WAVE_LEFT * waves_left)
+                    + constant.REWARD_DEATH_PER_WAVE_LEFT * waves_left
+                )
         self.last_reward = parts
         return sum(parts.values()), self.done

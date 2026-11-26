@@ -6,6 +6,7 @@ value. Illegal actions are masked out (their logits driven to ``MASK_FILL``)
 before forming the categorical distribution, so the policy can only ever assign
 probability to moves the game will accept.
 """
+
 from __future__ import annotations
 import math
 
@@ -18,8 +19,9 @@ from torch.distributions import Categorical
 MASK_FILL = -1e8
 
 
-def _layer_init(layer: nn.Linear, std: float = math.sqrt(2),
-                bias: float = 0.0) -> nn.Linear:
+def _layer_init(
+    layer: nn.Linear, std: float = math.sqrt(2), bias: float = 0.0
+) -> nn.Linear:
     """Orthogonal weight init — the standard PPO initialisation."""
     nn.init.orthogonal_(layer.weight, std)
     nn.init.constant_(layer.bias, bias)
@@ -29,8 +31,13 @@ def _layer_init(layer: nn.Linear, std: float = math.sqrt(2),
 class ActorCritic(nn.Module):
     """Shared-trunk policy/value network with action masking."""
 
-    def __init__(self, obs_size: int, num_actions: int,
-                 hidden: int = 64, value_dim: int = 1) -> None:
+    def __init__(
+        self,
+        obs_size: int,
+        num_actions: int,
+        hidden: int = 64,
+        value_dim: int = 1,
+    ) -> None:
         super().__init__()
         self.obs_size = obs_size
         self.num_actions = num_actions
@@ -43,12 +50,16 @@ class ActorCritic(nn.Module):
         self.value_dim = value_dim
         self.net_type = "mlp"
         self.trunk = nn.Sequential(
-            _layer_init(nn.Linear(obs_size, hidden)), nn.Tanh(),
-            _layer_init(nn.Linear(hidden, hidden)), nn.Tanh(),
+            _layer_init(nn.Linear(obs_size, hidden)),
+            nn.Tanh(),
+            _layer_init(nn.Linear(hidden, hidden)),
+            nn.Tanh(),
         )
         # Small policy-head gain keeps the initial policy near-uniform; unit
         # gain on the value head is the usual choice.
-        self.policy_head = _layer_init(nn.Linear(hidden, num_actions), std=0.01)
+        self.policy_head = _layer_init(
+            nn.Linear(hidden, num_actions), std=0.01
+        )
         self.value_head = _layer_init(nn.Linear(hidden, value_dim), std=1.0)
 
     def forward(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -64,8 +75,9 @@ class ActorCritic(nn.Module):
             value = value.squeeze(-1)
         return self.policy_head(h), value
 
-    def _dist(self, obs: torch.Tensor, mask: torch.Tensor
-              ) -> tuple[Categorical, torch.Tensor]:
+    def _dist(
+        self, obs: torch.Tensor, mask: torch.Tensor
+    ) -> tuple[Categorical, torch.Tensor]:
         """Masked action distribution and value for ``obs``.
 
         ``mask`` is a boolean tensor (``True`` = legal). Illegal logits are set
@@ -102,18 +114,24 @@ class ConvActorCritic(ActorCritic):
     """CNN policy/value net for the ``OBS_MODE == "grid"`` observation.
 
     The observation is a flat vector = ``GRID_CHANNELS`` board planes (``H*W``
-    each) + a scalar tail; this net reshapes the planes to ``(C, H, W)``, runs a
-    few full-resolution convolutions (spatial structure the flat MLP lacked),
-    reduces to 2 channels, flattens, concatenates the scalar tail, and feeds the
-    same two-head trunk. Reuses :class:`ActorCritic`'s masking / action helpers
-    (``_dist`` / ``get_action_and_value`` / ``get_value``) by only overriding
-    ``__init__`` and ``forward``.
+    each) + a scalar tail; this net reshapes the planes to ``(C, H, W)``, runs
+    a few full-resolution convolutions (spatial structure the flat MLP lacked),
+    reduces to 2 channels, flattens, concatenates the scalar tail, and feeds
+    the same two-head trunk. Reuses :class:`ActorCritic`'s masking / action
+    helpers (``_dist`` / ``get_action_and_value`` / ``get_value``) by only
+    overriding ``__init__`` and ``forward``.
     """
 
-    def __init__(self, obs_size: int, num_actions: int,
-                 hidden: int = 64, value_dim: int = 1) -> None:
+    def __init__(
+        self,
+        obs_size: int,
+        num_actions: int,
+        hidden: int = 64,
+        value_dim: int = 1,
+    ) -> None:
         nn.Module.__init__(self)  # skip ActorCritic's MLP-trunk construction
         from .. import constant
+
         self.C = constant.GRID_CHANNELS
         self.H = constant.GRID_H
         self.W = constant.GRID_W
@@ -122,30 +140,38 @@ class ConvActorCritic(ActorCritic):
         if obs_size != self.grid_len + self.num_scalars:
             raise ValueError(
                 f"obs_size {obs_size} != grid {self.grid_len} + scalars "
-                f"{self.num_scalars}; OBS_MODE/GRID_* out of sync with the net")
+                f"{self.num_scalars}; OBS_MODE/GRID_* out of sync with the net"
+            )
         self.obs_size = obs_size
         self.num_actions = num_actions
         self.hidden = hidden
         self.value_dim = value_dim
         self.net_type = "cnn"
         self.conv = nn.Sequential(
-            nn.Conv2d(self.C, 16, kernel_size=3, padding=1), nn.ReLU(),
-            nn.Conv2d(16, 16, kernel_size=3, padding=1), nn.ReLU(),
-            nn.Conv2d(16, 2, kernel_size=1), nn.ReLU(),  # channel reduce, keep HxW
+            nn.Conv2d(self.C, 16, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(16, 16, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(16, 2, kernel_size=1),
+            nn.ReLU(),  # channel reduce, keep HxW
         )
         conv_out = 2 * self.H * self.W
         self.fc = nn.Sequential(
-            _layer_init(nn.Linear(conv_out + self.num_scalars, hidden)), nn.ReLU(),
-            _layer_init(nn.Linear(hidden, hidden)), nn.ReLU(),
+            _layer_init(nn.Linear(conv_out + self.num_scalars, hidden)),
+            nn.ReLU(),
+            _layer_init(nn.Linear(hidden, hidden)),
+            nn.ReLU(),
         )
-        self.policy_head = _layer_init(nn.Linear(hidden, num_actions), std=0.01)
+        self.policy_head = _layer_init(
+            nn.Linear(hidden, num_actions), std=0.01
+        )
         self.value_head = _layer_init(nn.Linear(hidden, value_dim), std=1.0)
 
     def forward(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         single = obs.dim() == 1
         if single:
             obs = obs.unsqueeze(0)
-        grid = obs[:, :self.grid_len].reshape(-1, self.C, self.H, self.W)
+        grid = obs[:, : self.grid_len].reshape(-1, self.C, self.H, self.W)
         scalars = obs[:, self.grid_len:]
         h = self.conv(grid).flatten(1)
         h = self.fc(torch.cat([h, scalars], dim=1))
@@ -159,13 +185,19 @@ class ConvActorCritic(ActorCritic):
         return logits, value
 
 
-def build_net(obs_size: int, num_actions: int, hidden: int = 64,
-              value_dim: int = 1, net_type: str = "mlp") -> ActorCritic:
+def build_net(
+    obs_size: int,
+    num_actions: int,
+    hidden: int = 64,
+    value_dim: int = 1,
+    net_type: str = "mlp",
+) -> ActorCritic:
     """Construct the policy/value net of the requested ``net_type``.
 
     ``"mlp"`` (default) is the flat-observation :class:`ActorCritic` used by
     ``az.pt`` and deployment; ``"cnn"`` is the grid-observation
-    :class:`ConvActorCritic`. Both save/load and the trainer route through here.
+    :class:`ConvActorCritic`. Both save/load and the trainer route through
+    here.
     """
     if net_type == "cnn":
         return ConvActorCritic(obs_size, num_actions, hidden, value_dim)

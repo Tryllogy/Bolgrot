@@ -17,6 +17,7 @@ ways:
 
 Run: ``uv run --extra ai python -m src.ai.baselines [--policy src/ai/ppo.pt]``.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -51,6 +52,7 @@ def _first_legal(game: Game) -> int:
 
 # --- Scripted policies (each an ActionFn: Game -> action index) -------------
 
+
 def always_end_turn(game: Game) -> int:
     """Never cast — just end every turn (the passive "do nothing" floor)."""
     return _end_turn_index(game)
@@ -83,7 +85,7 @@ def greedy_clear(game: Game) -> int:
         if not ok:
             continue
         spell_index, (dx, dy) = game.ACTIONS[idx]
-        if spell_index not in (0, 1):        # only the player-moving jumps
+        if spell_index not in (0, 1):  # only the player-moving jumps
             continue
         target = (px + dx, py + dy)
         lands_on_flame = target in flames
@@ -97,15 +99,18 @@ def greedy_clear(game: Game) -> int:
 
     if best is not None and flames:
         return best[1]
-    return _end_turn_index(game) if legal[_end_turn_index(game)] \
+    return (
+        _end_turn_index(game)
+        if legal[_end_turn_index(game)]
         else _first_legal(game)
+    )
 
 
 # --- Benchmark --------------------------------------------------------------
 
+
 def score_policy(
-    act_fn: ActionFn,
-    seeds: list[int] = EVAL_SEEDS,
+    act_fn: ActionFn, seeds: list[int] = EVAL_SEEDS
 ) -> dict[str, float]:
     """Mean return, win rate, length and per-term reward for a policy."""
     totals = 0.0
@@ -120,9 +125,11 @@ def score_policy(
         for part, value in ep_parts.items():
             parts[part] += value
     n_seeds = len(seeds)
-    row = {"return": totals / n_seeds,
-           "win%": 100.0 * wins / n_seeds,
-           "steps": steps / n_seeds}
+    row = {
+        "return": totals / n_seeds,
+        "win%": 100.0 * wins / n_seeds,
+        "steps": steps / n_seeds,
+    }
     row.update({part: parts[part] / n_seeds for part in REWARD_PARTS})
     return row
 
@@ -131,23 +138,30 @@ def _print_table(rows: dict[str, dict[str, float]]) -> None:
     """Pretty-print the policy × reward-term table, sorted by return."""
     cols = ["return", "win%", "steps", *REWARD_PARTS]
     name_w = max(len("policy"), *(len(n) for n in rows))
-    header = "policy".ljust(name_w) + "  " + \
-        "  ".join(c.rjust(8) for c in cols)
+    header = (
+        "policy".ljust(name_w) + "  " + "  ".join(c.rjust(8) for c in cols)
+    )
     print(header)
     print("-" * len(header))
-    for name, row in sorted(rows.items(),
-                            key=lambda kv: kv[1]["return"], reverse=True):
-        line = name.ljust(name_w) + "  " + \
-            "  ".join(f"{row[c]:8.2f}" for c in cols)
+    for name, row in sorted(
+        rows.items(), key=lambda kv: kv[1]["return"], reverse=True
+    ):
+        line = (
+            name.ljust(name_w)
+            + "  "
+            + "  ".join(f"{row[c]:8.2f}" for c in cols)
+        )
         print(line)
 
 
-def benchmark(policy_path: str | None = None,
-              seeds: list[int] = EVAL_SEEDS,
-              mcts_sims: int | None = None,
-              az_path: str | None = None,
-              az_sims: int = 120,
-              az_value_mode: str = "shaped") -> dict[str, dict[str, float]]:
+def benchmark(
+    policy_path: str | None = None,
+    seeds: list[int] = EVAL_SEEDS,
+    mcts_sims: int | None = None,
+    az_path: str | None = None,
+    az_sims: int = 120,
+    az_value_mode: str = "shaped",
+) -> dict[str, dict[str, float]]:
     """Score every baseline (plus a trained policy if given); print a table.
 
     ``mcts_sims`` (opt-in — the MCTS agent is orders of magnitude slower than
@@ -162,19 +176,22 @@ def benchmark(policy_path: str | None = None,
     }
     if policy_path and os.path.exists(policy_path):
         from .policy import load_policy
+
         net = load_policy(policy_path)
         policies["trained"] = net_action_fn(net, deterministic=True)
     elif policy_path:
         print(f"(no policy at {policy_path}; skipping trained baseline)\n")
     if mcts_sims:
         from .mcts import mcts_action_fn
+
         policies["mcts"] = mcts_action_fn(simulations=mcts_sims)
     if az_path and os.path.exists(az_path):
         from .policy import load_policy
         from .alphazero import az_action_fn
-        policies["alphazero"] = az_action_fn(load_policy(az_path),
-                                             simulations=az_sims,
-                                             value_mode=az_value_mode)
+
+        policies["alphazero"] = az_action_fn(
+            load_policy(az_path), simulations=az_sims, value_mode=az_value_mode
+        )
     elif az_path:
         print(f"(no AZ policy at {az_path}; skipping alphazero row)\n")
 
@@ -185,63 +202,105 @@ def benchmark(policy_path: str | None = None,
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--policy", default="src/ai/ppo.pt",
-                        help="trained policy checkpoint to include (optional)")
-    parser.add_argument("--mcts-sims", type=int, default=None,
-                        help="add an MCTS row with this per-move sim budget "
-                             "(slow; use --seeds to shrink the seed set)")
-    parser.add_argument("--seeds", type=int, default=None,
-                        help="score on N EVAL_SEEDS only (default: all), "
-                             "starting at --seed-offset")
-    parser.add_argument("--seed-offset", type=int, default=0,
-                        help="start the --seeds window at this index. The "
-                             "training gate selects the saved net on "
-                             "EVAL_SEEDS[:16], which *contains* the default "
-                             "--seeds 6 window, so benchmarking a gate-picked "
-                             "net there scores it on the seeds it was chosen "
-                             "on (measured inflation: 83%% vs 37.5%% for one "
-                             "net). Use --seed-offset 16 for seeds no gate "
-                             "ever saw; the window may run past EVAL_SEEDS's "
-                             "32 entries (seeds are generated, not listed), so "
-                             "`--seeds 32 --seed-offset 16` is a 32-seed "
-                             "held-out set. Prefer that to `--seeds 8`: at 8 "
-                             "seeds a 2-win gap is indistinguishable from "
-                             "noise (measured 2026-07-16), which makes small "
-                             "real effects unreadable.")
-    parser.add_argument("--az", default=None,
-                        help="add an AlphaZero row from this policy "
-                             "checkpoint (net-guided PUCT; slow, use --seeds)")
-    parser.add_argument("--az-sims", type=int, default=120,
-                        help="PUCT sims/move for the --az row")
-    parser.add_argument("--az-value-mode",
-                        choices=("shaped", "winloss", "blend", "twohead"),
-                        default="shaped",
-                        help="value mode the --az net was trained with; the "
-                             "eval search must match (a P(win) head searched "
-                             "with shaped backup is incoherent)")
-    parser.add_argument("--reward-win", type=float, default=None,
-                        help="override constant.REWARD_WIN to match a net "
-                             "trained with `az_train --reward-win` (the search "
-                             "backup uses env rewards, so the eval must use the "
-                             "same value; the win *rate* is unaffected, but the "
-                             "search behaviour and the reward columns are not)")
-    parser.add_argument("--value-scale", type=float, default=None,
-                        help="override alphazero.VALUE_SCALE to match a net "
-                             "trained with `az_train --value-scale` (the eval "
-                             "search scales the value head back up by it)")
+    parser.add_argument(
+        "--policy",
+        default="src/ai/ppo.pt",
+        help="trained policy checkpoint to include (optional)",
+    )
+    parser.add_argument(
+        "--mcts-sims",
+        type=int,
+        default=None,
+        help="add an MCTS row with this per-move sim budget "
+        "(slow; use --seeds to shrink the seed set)",
+    )
+    parser.add_argument(
+        "--seeds",
+        type=int,
+        default=None,
+        help="score on N EVAL_SEEDS only (default: all), "
+        "starting at --seed-offset",
+    )
+    parser.add_argument(
+        "--seed-offset",
+        type=int,
+        default=0,
+        help="start the --seeds window at this index. The "
+        "training gate selects the saved net on "
+        "EVAL_SEEDS[:16], which *contains* the default "
+        "--seeds 6 window, so benchmarking a gate-picked "
+        "net there scores it on the seeds it was chosen "
+        "on (measured inflation: 83%% vs 37.5%% for one "
+        "net). Use --seed-offset 16 for seeds no gate "
+        "ever saw; the window may run past EVAL_SEEDS's "
+        "32 entries (seeds are generated, not listed), so "
+        "`--seeds 32 --seed-offset 16` is a 32-seed "
+        "held-out set. Prefer that to `--seeds 8`: at 8 "
+        "seeds a 2-win gap is indistinguishable from "
+        "noise (measured 2026-07-16), which makes small "
+        "real effects unreadable.",
+    )
+    parser.add_argument(
+        "--az",
+        default=None,
+        help="add an AlphaZero row from this policy "
+        "checkpoint (net-guided PUCT; slow, use --seeds)",
+    )
+    parser.add_argument(
+        "--az-sims",
+        type=int,
+        default=120,
+        help="PUCT sims/move for the --az row",
+    )
+    parser.add_argument(
+        "--az-value-mode",
+        choices=("shaped", "winloss", "blend", "twohead"),
+        default="shaped",
+        help="value mode the --az net was trained with; the "
+        "eval search must match (a P(win) head searched "
+        "with shaped backup is incoherent)",
+    )
+    parser.add_argument(
+        "--reward-win",
+        type=float,
+        default=None,
+        help="override constant.REWARD_WIN to match a net "
+        "trained with `az_train --reward-win` (the search "
+        "backup uses env rewards, so the eval must use the "
+        "same value; the win *rate* is unaffected, but the "
+        "search behaviour and the reward columns are not)",
+    )
+    parser.add_argument(
+        "--value-scale",
+        type=float,
+        default=None,
+        help="override alphazero.VALUE_SCALE to match a net "
+        "trained with `az_train --value-scale` (the eval "
+        "search scales the value head back up by it)",
+    )
     args = parser.parse_args()
     if args.reward_win is not None:
         from .. import constant
+
         constant.REWARD_WIN = args.reward_win
     if args.value_scale is not None:
         from . import alphazero
+
         alphazero.VALUE_SCALE = args.value_scale
     start = args.seed_offset
-    seeds = ([eval_seed(i) for i in range(start, start + args.seeds)]
-             if args.seeds else EVAL_SEEDS[start:])
-    benchmark(args.policy, seeds=seeds, mcts_sims=args.mcts_sims,
-              az_path=args.az, az_sims=args.az_sims,
-              az_value_mode=args.az_value_mode)
+    seeds = (
+        [eval_seed(i) for i in range(start, start + args.seeds)]
+        if args.seeds
+        else EVAL_SEEDS[start:]
+    )
+    benchmark(
+        args.policy,
+        seeds=seeds,
+        mcts_sims=args.mcts_sims,
+        az_path=args.az,
+        az_sims=args.az_sims,
+        az_value_mode=args.az_value_mode,
+    )
 
 
 if __name__ == "__main__":
